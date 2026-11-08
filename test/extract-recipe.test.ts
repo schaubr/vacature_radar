@@ -32,6 +32,10 @@ describe("applyRecipe on fixtures", () => {
     expect(items[0].url).toBe("https://www.jobsolutions.be/jobs/18042-technisch-assistent-netheid-openbaar-domein");
     expect(items[0].title).toBe("Technisch assistent netheid openbaar domein");
     expect(items[0].organization).toContain("Stad Nieuwpoort");
+    for (const i of items) {
+      expect(i.organization).not.toMatch(/\d{2}\/\d{2}\/\d{4}/);
+      expect(i.organization.length).toBeLessThanOrEqual(120);
+    }
   });
 });
 
@@ -45,6 +49,15 @@ describe("applyRecipe semantics", () => {
     expect(items).toEqual([
       { title: "Sociaal werker meer", url: "https://x.be/a", organization: "", location: "", dateText: "", snippet: "Sociaal werker meer" },
     ]);
+  });
+  it("takes only the first line of organization, location and date values", () => {
+    const html = `<ul><li><a href="/a">Job titel</a><p class="o">VGC - Brussel<br>03/11/2026 - 26/11/2026</p><div class="l"><span>Gent</span><div>tweede</div></div><p class="d">  </p></li></ul>`;
+    const [i] = applyRecipe(html, "https://x.be/", { ...base, titleSelector: "a", organizationSelector: ".o", locationSelector: ".l", dateSelector: ".d" });
+    expect(i.organization).toBe("VGC - Brussel");
+    expect(i.location).toBe("Gent");
+    expect(i.dateText).toBe("");
+    const long = applyRecipe(`<li><a href="/a">Job titel</a><p class="o">${"x".repeat(300)}</p></li>`, "https://x.be/", { ...base, titleSelector: "a", organizationSelector: ".o" });
+    expect(long[0].organization).toHaveLength(120);
   });
   it("returns [] for invalid selectors", () => {
     expect(applyRecipe("<li>a</li>", "https://x.be/", { ...base, itemSelector: "li[" })).toEqual([]);

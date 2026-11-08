@@ -530,6 +530,7 @@ export class ScanService {
       feedback,
     );
     store.saveScore(row.id, { fields: r.fields, score: r.score, model: r.usage.model, profileVersion: profile.version });
+    store.updateIdentity(row.id, { organization: r.organization, location: r.location });
     return r.usage;
   }
 
@@ -628,9 +629,13 @@ export class ScanService {
 
   // ---------- test ----------
 
-  async testSource(input: { url: string; renderMode: RenderMode; maxPages: number }): Promise<SourceTestResult> {
+  async testSource(input: { url: string; renderMode: RenderMode; maxPages: number; sourceId?: number }): Promise<SourceTestResult> {
     const { fetcher } = this.deps;
     const settings = this.deps.store.getSettings();
+    // Use what an existing source with this URL has learned (its saved recipe and detected mode).
+    const byId = input.sourceId !== undefined ? this.deps.store.getSource(input.sourceId) : null;
+    const known =
+      byId && byId.url === input.url ? byId : (this.deps.store.listSources().find((s) => s.url === input.url) ?? null);
     let cost = 0;
     const base = this.llmUsable(settings);
     const metered: LlmClient | null = base
@@ -665,9 +670,9 @@ export class ScanService {
       const out = await this.fetchAndExtract({
         url: input.url,
         renderMode: input.renderMode,
-        detectedMode: null,
+        detectedMode: input.renderMode === "auto" ? (known?.detectedMode ?? null) : null,
         maxPages: Math.min(5, Math.max(1, input.maxPages || 1)),
-        existingRecipe: null,
+        existingRecipe: known?.recipe ?? null,
         lastStrategy: null,
         lastPageHash: null,
         settings,

@@ -101,6 +101,8 @@ describe("scoreVacancy", () => {
     );
     expect(r.score.bucket).toBe("strong");
     expect(r.usage).toBe(usage);
+    expect(r.organization).toBe("WZC Zonnebloem");
+    expect(r.location).toBe("Gent");
     const req = seen as unknown as StructuredRequest<unknown>;
     expect(req.model).toBe("claude-opus-5-5");
     expect(req.effort).toBe("medium");

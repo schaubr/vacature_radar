@@ -19,6 +19,8 @@ Then drag `release/mac-arm64/Vacature Radar.app` to `/Applications`. The app car
 
 `npm start` builds and runs the app without packaging.
 
+Closing the window keeps the app running in the menu bar (the ◎ icon). Scans run every 6 hours while the Mac is awake, and a missed scan is caught up after the Mac wakes. Quit from the menu bar icon.
+
 ## First-time setup
 
 1. **Settings:** paste your API key and save. It is validated with a tiny request before it is stored.

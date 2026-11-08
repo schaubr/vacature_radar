@@ -144,7 +144,7 @@ export class RadarService implements RadarApi {
     this.emitStatus();
   }
 
-  "sources.test"(input: { url: string; renderMode: RenderMode; maxPages: number }) {
+  "sources.test"(input: { url: string; renderMode: RenderMode; maxPages: number; sourceId?: number }) {
     return this.d.scanner.testSource(input);
   }
 

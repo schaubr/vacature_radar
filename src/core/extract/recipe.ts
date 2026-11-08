@@ -12,6 +12,17 @@ function textOf(el: El): string {
   return n ? nodeText(n as AnyNode, true) : "";
 }
 
+/** First non-empty line of an element (<br> and block boundaries are line breaks), capped at 120 chars. */
+function firstLineOf(el: El): string {
+  const n = el.get(0);
+  if (!n) return "";
+  const line = nodeText(n as AnyNode, false)
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l !== "");
+  return (line ?? "").slice(0, 120).trim();
+}
+
 function firstMatch(item: El, selector: string): El | null {
   if (!selector.trim()) return null;
   const found = item.find(selector).first();
@@ -75,7 +86,7 @@ export function applyRecipe(html: string, baseUrl: string, recipe: Recipe): List
       const pick = (sel: string): string => {
         if (!sel.trim()) return "";
         const e = firstMatch(item, sel);
-        return e ? textOf(e) : "";
+        return e ? firstLineOf(e) : "";
       };
       items.push({
         title: title.length > 300 ? title.slice(0, 300) : title,

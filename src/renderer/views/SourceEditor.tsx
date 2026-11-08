@@ -28,7 +28,7 @@ export function SourceEditor({ source, onClose }: { source: Source | null; onClo
     setResult(null);
     setTestErr(null);
     try {
-      setResult(await call("sources.test", { url: url.trim(), renderMode, maxPages: pages }));
+      setResult(await call("sources.test", { url: url.trim(), renderMode, maxPages: pages, sourceId: source?.id }));
     } catch (e) {
       setTestErr(errMsg(e));
     } finally {

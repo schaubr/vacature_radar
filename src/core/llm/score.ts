@@ -73,7 +73,7 @@ export async function scoreVacancy(
   profile: Profile,
   vacancy: ScoringVacancyInput,
   feedback: FeedbackHint[],
-): Promise<{ fields: VacancyFields; score: ScoreResult; usage: LlmUsage }> {
+): Promise<{ fields: VacancyFields; score: ScoreResult; organization: string; location: string; usage: LlmUsage }> {
   const { data, usage } = await llm.structured({
     purpose: "score",
     model: settings.scoringModel,
@@ -83,5 +83,5 @@ export async function scoreVacancy(
     user: buildScoringUser(vacancy, feedback),
     schema: ScoreSchema,
   });
-  return { ...postProcessScore(data), usage };
+  return { ...postProcessScore(data), organization: data.organization.trim(), location: data.location.trim(), usage };
 }

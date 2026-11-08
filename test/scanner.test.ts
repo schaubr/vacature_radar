@@ -33,9 +33,9 @@ function recipeOut(r: Recipe) {
   };
 }
 
-function scoreOut(score: number) {
+function scoreOut(score: number, organization = "", location = "") {
   return {
-    summary: "s", organization: "", location: "", sector: "social", is_social_sector: true, hours: "", contract: "",
+    summary: "s", organization, location, sector: "social", is_social_sector: true, hours: "", contract: "",
     diploma_required: "", experience_required: "", pay_scale: "", deadline: "",
     score, bucket: "strong" as const,
     subscores: { diploma: 80, experience: 80, skills: 80, preferences: 80 },
@@ -49,6 +49,7 @@ class FakeLlm implements LlmClient {
   scoreFor: (description: string, title: string) => number = () => 80;
   learned: Recipe | null = VVSG_RECIPE;
   failScoreFor: string | null = null;
+  identity: { organization: string; location: string } = { organization: "", location: "" };
   async structured(req: any) {
     this.calls[req.purpose] = (this.calls[req.purpose] ?? 0) + 1;
     let data: unknown;
@@ -59,7 +60,7 @@ class FakeLlm implements LlmClient {
       const title = /Title: (.*)/.exec(text)?.[1] ?? "";
       this.titles.push(title);
       if (this.failScoreFor && title.includes(this.failScoreFor)) throw new Error("boom");
-      data = scoreOut(this.scoreFor(text, title));
+      data = scoreOut(this.scoreFor(text, title), this.identity.organization, this.identity.location);
     } else {
       data = { vacancies: [] };
     }
@@ -293,6 +294,26 @@ describe("ScanService", () => {
     e.setNow("2026-11-09T10:00:00Z");
     await e.scanner.scanSource(id);
     expect(e.store.getVacancy(v.id)!.status).toBe("closed");
+  });
+
+  it("writes the organization and location from the scoring answer back, keeping the dedupe key", async () => {
+    const e = mk();
+    e.llm.identity = { organization: "Clean Org", location: "Clean Town" };
+    await e.scanner.scanSource(e.addSource());
+    for (const v of rows(e)) {
+      const row = e.store.getVacancy(v.id)!;
+      expect(row).toMatchObject({ organization: "Clean Org", location: "Clean Town" });
+      expect(row.dedupeKey).not.toContain("clean org");
+    }
+    // empty answers leave the stored values alone (scoreOne path)
+    const f = mk();
+    f.store.saveSettings({ maxNewScoredPerScan: 1 });
+    await f.scanner.scanSource(f.addSource());
+    const skipped = rows(f).find((v) => v.scoreState === "skipped")!;
+    f.llm.identity = { organization: "Late Org", location: "" };
+    const before = f.store.getVacancy(skipped.id)!;
+    await f.scanner.scoreOne(skipped.id);
+    expect(f.store.getVacancy(skipped.id)).toMatchObject({ organization: "Late Org", location: before.location });
   });
 
   it("says why 0 items were found when there is no key or no budget", async () => {
@@ -567,6 +588,20 @@ describe("ScanService", () => {
       expect(r.llmCostUsd).toBeCloseTo(0.01);
       expect(rows(e)).toHaveLength(0);
       expect(e.store.listSources()).toHaveLength(0);
+    });
+
+    it("uses the saved recipe of the source (by id, or by identical URL)", async () => {
+      const e = mk({ llm: false });
+      const id = e.addSource();
+      const byId = await e.scanner.testSource({ url: VVSG_URL, renderMode: "static", maxPages: 1, sourceId: id });
+      expect(byId).toMatchObject({ ok: true, strategy: "recipe" });
+      expect(byId.items).toHaveLength(N);
+      const byUrl = await e.scanner.testSource({ url: VVSG_URL, renderMode: "static", maxPages: 1 });
+      expect(byUrl.items).toHaveLength(N);
+      // a different (edited) URL does not borrow the recipe
+      e.routes.set("https://www.vvsg.be/andere", VVSG_HTML);
+      const other = await e.scanner.testSource({ url: "https://www.vvsg.be/andere", renderMode: "static", maxPages: 1, sourceId: id });
+      expect(other.ok).toBe(false);
     });
 
     it("reports robots and fetch failures", async () => {

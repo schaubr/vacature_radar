@@ -22,7 +22,7 @@ export interface RadarApi {
   "sources.create"(input: SourceInput): Source;
   "sources.update"(id: number, patch: Partial<SourceInput>): Source;
   "sources.delete"(id: number): void; // also deletes its vacancies
-  "sources.test"(input: { url: string; renderMode: RenderMode; maxPages: number }): Promise<SourceTestResult>;
+  "sources.test"(input: { url: string; renderMode: RenderMode; maxPages: number; sourceId?: number }): Promise<SourceTestResult>;
   "sources.resetRecipe"(id: number): Source; // clears recipe+strategy so next scan relearns
   "scan.now"(sourceId: number | null): void; // null = all enabled; returns immediately
   "vacancies.list"(filter: VacancyFilter): VacancyListItem[];

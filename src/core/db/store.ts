@@ -496,6 +496,17 @@ export class Store {
     );
   }
 
+  /** Overwrites organization/location only with non-empty values. Does not touch dedupe_key. */
+  updateIdentity(id: number, v: { organization?: string; location?: string }): void {
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    const org = v.organization?.trim();
+    const loc = v.location?.trim();
+    if (org) (sets.push("organization = ?"), vals.push(org));
+    if (loc) (sets.push("location = ?"), vals.push(loc));
+    if (sets.length) this.run(`UPDATE vacancies SET ${sets.join(", ")} WHERE id = ?`, ...vals, id);
+  }
+
   markNotified(id: number, now: string): void {
     this.run("UPDATE vacancies SET notified_at = ? WHERE id = ?", now, id);
   }

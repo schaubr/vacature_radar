@@ -100,7 +100,11 @@ describe("RadarService", () => {
     await vi.waitFor(() => expect(service["app.status"]().scanning).toBe(false));
     expect(names()).toContain("app.status");
     expect(store.listSources().find((s) => s.name === "off")!.lastStatus).toBe("never");
-    const t = await service["sources.test"]({ url: VVSG_URL, renderMode: "static", maxPages: 1 });
+    // Same URL as an existing source: its saved recipe is used.
+    const known = await service["sources.test"]({ url: VVSG_URL, renderMode: "static", maxPages: 1, sourceId: a.id });
+    expect(known).toMatchObject({ ok: true, strategy: "recipe" });
+    expect(known.items).toHaveLength(5);
+    const t = await service["sources.test"]({ url: VVSG_URL + "?x=1", renderMode: "static", maxPages: 1 });
     expect(t).toMatchObject({ ok: false, items: [], robotsAllowed: true });
     expect(t.error).toMatch(/No vacancies/); // no recipe, no key: only non-LLM tiers ran
   });

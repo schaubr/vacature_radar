@@ -241,6 +241,14 @@ describe("vacancies", () => {
     expect(store.getVacancy(a.id)!.status).toBe("new");
   });
 
+  it("updateIdentity only overwrites with non-empty values and keeps the dedupe key", () => {
+    const v = store.insertVacancy(nv(sid, { organization: "Old org", location: "Old town" }));
+    store.updateIdentity(v.id, { organization: "  ", location: "Gent" });
+    expect(store.getVacancy(v.id)).toMatchObject({ organization: "Old org", location: "Gent", dedupeKey: v.dedupeKey });
+    store.updateIdentity(v.id, { organization: "New org" });
+    expect(store.getVacancy(v.id)).toMatchObject({ organization: "New org", location: "Gent", dedupeKey: v.dedupeKey });
+  });
+
   it("markMissed never closes interested/applied/dismissed rows", () => {
     const late = new Date("2026-12-01T00:00:00Z");
     const ids = (["interested", "applied", "dismissed", "seen"] as const).map((st) => {
