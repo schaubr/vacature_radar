@@ -1,0 +1,636 @@
+import type { RadarEvents } from "../../shared/ipc";
+import type { RenderMode, Settings, Source, SourceTestResult, ExtractStrategy, ListingItem, Recipe } from "../../shared/types";
+import type { Store, VacancyRow } from "../db/store";
+import type { PoliteFetcher } from "../net/fetcher";
+import type { PageRenderer } from "../net/render";
+import type { Notifier } from "../notify";
+import { BudgetExceededError, LlmNotConfiguredError, type LlmClient, type LlmUsage } from "../llm/client";
+import { llmExtractListing } from "../llm/extract-llm";
+import { learnRecipe } from "../llm/recipe-learn";
+import { scoreVacancy } from "../llm/score";
+import { extractDetail } from "../extract/detail";
+import { cleanHtmlForLlm, looksJsRendered, sha256 } from "../extract/html";
+import { extractListing } from "../extract/listing";
+import { applyRecipe, findNextPage, recipeLooksHealthy } from "../extract/recipe";
+import { dedupeKey } from "../match/dedupe";
+import { prefilter } from "../match/prefilter";
+
+export interface ScanDeps {
+  store: Store;
+  fetcher: PoliteFetcher;
+  renderer: PageRenderer | null; // null in contexts without a browser
+  llm: LlmClient | null;
+  notifier: Notifier;
+  now: () => Date;
+  emit: <E extends keyof RadarEvents>(event: E, payload: RadarEvents[E]) => void;
+  /**
+   * Whether the LLM can actually be used right now (API key present). Defaults to `llm !== null`.
+   * Extra optional dep: main passes a function that checks the secret store.
+   */
+  llmConfigured?: () => boolean;
+}
+
+type Mode = "static" | "browser";
+
+interface PageLoad {
+  html: string;
+  contentType: string;
+  url: string;
+}
+
+interface ExtractOutcome {
+  items: ListingItem[];
+  strategy: ExtractStrategy | null;
+  recipe: Recipe | null;
+  modeUsed: Mode;
+  pageHash: string;
+  /** The LLM tiers were skipped because the page is unchanged since the last LLM extraction. */
+  guardSkipped: boolean;
+  /** The mode "auto" resolved to, if any. */
+  detectedMode: Mode | null;
+}
+
+const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+export class ScanService {
+  private queue: number[] = [];
+  private current: number | null = null;
+  private running: Promise<void> | null = null;
+  private statusListener: (() => void) | null = null;
+
+  constructor(private readonly deps: ScanDeps) {}
+
+  /** Registers a callback invoked whenever `status` may have changed. */
+  setStatusListener(fn: (() => void) | null): void {
+    this.statusListener = fn;
+  }
+
+  get status(): { scanning: boolean; currentSourceId: number | null; queueLength: number } {
+    return {
+      scanning: this.running !== null || this.current !== null,
+      currentSourceId: this.current,
+      queueLength: this.queue.length,
+    };
+  }
+
+  private changed(): void {
+    try {
+      this.statusListener?.();
+    } catch {
+      /* listener errors must not break scanning */
+    }
+  }
+
+  // ---------- queue ----------
+
+  /** Serial scan queue. If a run is active, the new ids are merged into it and the active run's promise is returned. */
+  scanMany(sourceIds: number[]): Promise<void> {
+    for (const id of sourceIds) {
+      if (id !== this.current && !this.queue.includes(id)) this.queue.push(id);
+    }
+    if (this.running) {
+      this.changed();
+      return this.running;
+    }
+    if (this.queue.length === 0) return Promise.resolve();
+    this.running = this.drain();
+    this.changed();
+    return this.running;
+  }
+
+  private async drain(): Promise<void> {
+    try {
+      while (this.queue.length > 0) {
+        const id = this.queue.shift()!;
+        await this.scanSource(id);
+      }
+    } finally {
+      this.current = null;
+      this.running = null;
+      this.changed();
+    }
+  }
+
+  // ---------- helpers ----------
+
+  private log(level: "info" | "warn" | "error", message: string, sourceId: number | null = null): void {
+    try {
+      this.deps.store.log(level, message, sourceId);
+    } catch {
+      /* store closed or source gone */
+    }
+  }
+
+  private budgetExceeded(settings: Settings): boolean {
+    return this.deps.store.monthUsageUsd(this.deps.now()) >= settings.monthlyBudgetUsd;
+  }
+
+  private llmUsable(settings: Settings): LlmClient | null {
+    const { llm, llmConfigured } = this.deps;
+    if (!llm) return null;
+    if (llmConfigured && !llmConfigured()) return null;
+    if (this.budgetExceeded(settings)) return null;
+    return llm;
+  }
+
+  private async loadPage(url: string, mode: Mode): Promise<PageLoad> {
+    if (mode === "browser") {
+      if (!this.deps.renderer) throw new Error("Browser rendering is not available here");
+      await this.deps.fetcher.throttle(url);
+      const r = await this.deps.renderer.render(url);
+      return { html: r.html, contentType: "text/html", url: r.url || url };
+    }
+    const r = await this.deps.fetcher.fetch(url);
+    return { html: r.body, contentType: r.contentType, url: r.url || url };
+  }
+
+  /** Mode + extraction shared by scanSource and testSource (steps 3-5). */
+  private async fetchAndExtract(args: {
+    url: string;
+    renderMode: RenderMode;
+    detectedMode: Mode | null;
+    maxPages: number;
+    existingRecipe: Recipe | null;
+    lastStrategy: ExtractStrategy | null;
+    lastPageHash: string | null;
+    settings: Settings;
+    llm: LlmClient | null;
+  }): Promise<ExtractOutcome> {
+    const { url, settings, llm } = args;
+    let detectedMode: Mode | null = null;
+    let mode: Mode;
+    let auto = false;
+    if (args.renderMode === "static") mode = "static";
+    else if (args.renderMode === "browser") mode = "browser";
+    else if (args.detectedMode) mode = args.detectedMode;
+    else {
+      auto = true;
+      mode = "static";
+    }
+
+    let page = await this.loadPage(url, mode);
+    if (auto && this.deps.renderer && looksJsRendered(page.html)) {
+      mode = "browser";
+      page = await this.loadPage(url, mode);
+      detectedMode = "browser";
+    }
+
+    const run = async (p: PageLoad) => {
+      const pageHash = sha256(cleanHtmlForLlm(p.html));
+      let guardSkipped = false;
+      let useLlm = llm;
+      if (useLlm) {
+        const healthy =
+          args.existingRecipe !== null && recipeLooksHealthy(applyRecipe(p.html, p.url, args.existingRecipe));
+        if (!healthy && pageHash === args.lastPageHash && args.lastStrategy === "llm") {
+          useLlm = null;
+          guardSkipped = true;
+        }
+      }
+      const res = await extractListing({
+        url: p.url,
+        html: p.html,
+        contentType: p.contentType,
+        existingRecipe: args.existingRecipe,
+        learnRecipe: useLlm ? (cleaned, u) => learnRecipe(useLlm!, settings, cleaned, u, p.html) : undefined,
+        llmExtract: useLlm ? (compact, u) => llmExtractListing(useLlm!, settings, compact, u) : undefined,
+      });
+      return { ...res, pageHash, guardSkipped };
+    };
+
+    let res = await run(page);
+    // Auto mode, static page that yielded nothing: the page may be built by JavaScript.
+    if (auto && mode === "static" && res.items.length === 0 && !res.guardSkipped && this.deps.renderer) {
+      mode = "browser";
+      page = await this.loadPage(url, mode);
+      detectedMode = "browser";
+      res = await run(page);
+    } else if (auto && mode === "static" && res.items.length > 0) {
+      detectedMode = "static";
+    } else if (auto && mode === "browser" && res.items.length > 0) {
+      detectedMode = "browser";
+    }
+
+    let items = res.items;
+    // Pagination: only with a recipe, following the same recipe.
+    if (res.strategy === "recipe" && res.recipe && args.maxPages > 1) {
+      const seen = new Set(items.map((i) => i.url));
+      const visited = new Set([page.url]);
+      let cur = page;
+      for (let n = 1; n < args.maxPages; n++) {
+        const next = findNextPage(cur.html, cur.url, res.recipe);
+        if (!next || visited.has(next)) break;
+        visited.add(next);
+        try {
+          cur = await this.loadPage(next, mode);
+        } catch (e) {
+          this.log("warn", `Pagination stopped at ${next}: ${errMsg(e)}`);
+          break;
+        }
+        const more = applyRecipe(cur.html, cur.url, res.recipe).filter((i) => !seen.has(i.url));
+        if (more.length === 0) break;
+        for (const i of more) seen.add(i.url);
+        items = items.concat(more);
+      }
+    }
+
+    return {
+      items,
+      strategy: res.strategy,
+      recipe: res.recipe,
+      modeUsed: mode,
+      pageHash: res.pageHash,
+      guardSkipped: res.guardSkipped,
+      detectedMode,
+    };
+  }
+
+  // ---------- scanning ----------
+
+  async scanSource(sourceId: number): Promise<void> {
+    const { store } = this.deps;
+    let source: Source | null;
+    try {
+      source = store.getSource(sourceId);
+    } catch {
+      return;
+    }
+    if (!source) return;
+    this.current = sourceId;
+    this.changed();
+    try {
+      await this.doScan(source);
+    } catch (e) {
+      // doScan handles its own errors; this is the last line of defence for the queue.
+      this.log("error", `Scan crashed: ${errMsg(e)}`, sourceId);
+    } finally {
+      this.current = null;
+      this.changed();
+    }
+  }
+
+  private async doScan(source: Source): Promise<void> {
+    const { store, fetcher } = this.deps;
+    const sourceId = source.id;
+    const now = this.deps.now();
+    const nowIso = now.toISOString();
+    this.log("info", "Scan started", sourceId);
+
+    const fail = (message: string, status: "error" | "empty" = "error"): void => {
+      try {
+        store.updateSourceRuntime(sourceId, {
+          lastScanAt: nowIso,
+          lastStatus: status,
+          lastError: message,
+          consecutiveFailures: source.consecutiveFailures + 1,
+        });
+      } catch {
+        /* source deleted */
+      }
+      this.log(status === "error" ? "error" : "warn", message, sourceId);
+      this.deps.emit("sources.changed", {});
+    };
+
+    const settings = store.getSettings();
+    let mode: Mode = source.renderMode === "browser" ? "browser" : "static";
+    let outcome: ExtractOutcome;
+    try {
+      // 2. robots
+      if (!(await fetcher.isAllowed(source.url))) {
+        fail("Blocked by robots.txt");
+        return;
+      }
+      // 3-5. load + extract
+      outcome = await this.fetchAndExtract({
+        url: source.url,
+        renderMode: source.renderMode,
+        detectedMode: source.detectedMode,
+        maxPages: source.maxPages,
+        existingRecipe: source.recipe,
+        lastStrategy: source.strategy,
+        lastPageHash: source.lastPageHash,
+        settings,
+        llm: this.llmUsable(settings),
+      });
+      mode = outcome.modeUsed;
+    } catch (e) {
+      fail(errMsg(e));
+      return;
+    }
+
+    // 6. nothing found
+    if (outcome.items.length === 0) {
+      if (outcome.guardSkipped) {
+        // Unchanged page whose items were found by the LLM before: do not pay again, do not count as failure.
+        store.updateSourceRuntime(sourceId, {
+          lastScanAt: nowIso,
+          lastStatus: "ok",
+          lastError: null,
+          detectedMode: outcome.detectedMode ?? source.detectedMode,
+        });
+        this.log("info", "Page unchanged since last LLM extraction; skipped LLM tiers", sourceId);
+        this.deps.emit("sources.changed", {});
+        return;
+      }
+      fail("No vacancies found on the page", "empty");
+      return;
+    }
+
+    let found = 0;
+    let newIds: number[] = [];
+    try {
+      // 7. upsert
+      const seenIds: number[] = [];
+      const fresh: VacancyRow[] = [];
+      for (const item of outcome.items) {
+        const existing = store.getVacancyByUrl(item.url);
+        if (existing) {
+          store.touchVacancySeen(existing.id, nowIso);
+          seenIds.push(existing.id);
+          continue;
+        }
+        const row = store.insertVacancy({
+          ...item,
+          sourceId,
+          dedupeKey: dedupeKey(item.title, item.organization),
+          now: nowIso,
+        });
+        seenIds.push(row.id);
+        const dup = store.findDuplicateCandidate(row.dedupeKey, row.id, now);
+        if (dup) store.setDuplicateOf(row.id, dup.id);
+        else fresh.push(row);
+      }
+      found = outcome.items.length;
+      newIds = fresh.map((r) => r.id);
+
+      // 8. missed / closing (only reached after a successful extraction)
+      const closed = store.markMissed(sourceId, seenIds, settings.closeAfterMissedScans);
+      if (closed.length > 0) this.log("info", `${closed.length} vacancies no longer listed were closed`, sourceId);
+
+      // 9. prefilter + detail
+      const prefs = store.getProfile().preferences;
+      // DESIGN-DEVIATION: the per-scan cap counts only vacancies that pass the prefilter (those that cost a detail
+      // fetch and a scoring call); prefiltered-out ones are free and must not starve the cap.
+      let budgeted = 0;
+      for (const row of fresh) {
+        const pf = prefilter({ title: row.title, snippet: row.snippet }, prefs);
+        if (!pf.pass) {
+          store.setScoreState(row.id, "filtered", { prefilterReason: pf.reason });
+          continue;
+        }
+        if (budgeted >= settings.maxNewScoredPerScan) {
+          store.setScoreState(row.id, "skipped");
+          continue;
+        }
+        budgeted++;
+        await this.fetchDetail(row, mode);
+      }
+
+      // 10. source runtime
+      store.updateSourceRuntime(sourceId, {
+        lastScanAt: nowIso,
+        lastSuccessAt: nowIso,
+        lastStatus: "ok",
+        lastError: null,
+        lastFound: found,
+        strategy: outcome.strategy,
+        recipe: outcome.recipe,
+        lastPageHash: outcome.pageHash,
+        consecutiveFailures: 0,
+        detectedMode: outcome.detectedMode ?? source.detectedMode,
+      });
+    } catch (e) {
+      fail(errMsg(e));
+      return;
+    }
+    this.deps.emit("vacancies.changed", { newIds });
+    this.deps.emit("sources.changed", {});
+
+    // 11-12. scoring queue + notifications (errors here must not turn the scan into a failure)
+    let scored = 0;
+    try {
+      const scoredIds = await this.runScoringQueue(settings, sourceId);
+      scored = scoredIds.length;
+      this.notifyScored(scoredIds, settings);
+      if (scored > 0) this.deps.emit("vacancies.changed", { newIds: [] });
+    } catch (e) {
+      this.log("error", `Scoring failed: ${errMsg(e)}`, sourceId);
+    }
+
+    // 13.
+    this.log("info", `Scan finished: ${found} found, ${newIds.length} new, ${scored} scored`, sourceId);
+  }
+
+  private async fetchDetail(row: VacancyRow, mode: Mode): Promise<void> {
+    const { store, fetcher } = this.deps;
+    try {
+      if (!(await fetcher.isAllowed(row.url))) {
+        store.setScoreState(row.id, "error", { error: "Blocked by robots.txt" });
+        return;
+      }
+      const page = await this.loadPage(row.url, mode);
+      const d = extractDetail(page.html, page.url);
+      if (!d.text.trim()) {
+        store.setScoreState(row.id, "error", { error: "No text found on the detail page" });
+        return;
+      }
+      store.saveDetail(row.id, d.text, { organization: d.organization, location: d.location, dateText: d.datePosted });
+    } catch (e) {
+      store.setScoreState(row.id, "error", { error: errMsg(e) });
+    }
+  }
+
+  // ---------- scoring ----------
+
+  private feedbackHints() {
+    return this.deps.store.recentFeedback(10);
+  }
+
+  /** Scores pending vacancies serially. Returns ids scored in this run. */
+  private async runScoringQueue(settings: Settings, sourceId: number | null): Promise<number[]> {
+    const { store, llm } = this.deps;
+    const pending = store.pendingScoring(50);
+    if (pending.length === 0) return [];
+    const profile = store.getProfile();
+    let reason: string | null = null;
+    if (!llm || (this.deps.llmConfigured && !this.deps.llmConfigured())) reason = "no API key configured";
+    else if (!profile.markdown.trim()) reason = "profile is empty";
+    else if (this.budgetExceeded(settings)) reason = "monthly budget reached";
+    if (reason) {
+      this.log("warn", `Scoring skipped (${reason}); ${pending.length} vacancies stay pending`, sourceId);
+      return [];
+    }
+    const feedback = this.feedbackHints();
+    const scored: number[] = [];
+    for (const row of pending) {
+      try {
+        await this.scoreRow(llm!, settings, profile, row, feedback);
+        scored.push(row.id);
+      } catch (e) {
+        if (e instanceof BudgetExceededError || e instanceof LlmNotConfiguredError) {
+          this.log("warn", `Scoring stopped: ${e.message}`, sourceId);
+          break;
+        }
+        try {
+          store.setScoreState(row.id, "error", { error: errMsg(e) });
+        } catch {
+          /* row gone */
+        }
+        this.log("error", `Scoring "${row.title}" failed: ${errMsg(e)}`, sourceId);
+      }
+    }
+    return scored;
+  }
+
+  private async scoreRow(
+    llm: LlmClient,
+    settings: Settings,
+    profile: ReturnType<Store["getProfile"]>,
+    row: VacancyRow,
+    feedback: ReturnType<Store["recentFeedback"]>,
+  ): Promise<LlmUsage> {
+    const { store } = this.deps;
+    const sourceName = store.getSource(row.sourceId)?.name ?? "";
+    const r = await scoreVacancy(
+      llm,
+      settings,
+      profile,
+      {
+        title: row.title,
+        organization: row.organization,
+        location: row.location,
+        sourceName,
+        url: row.url,
+        description: row.description,
+      },
+      feedback,
+    );
+    store.saveScore(row.id, { fields: r.fields, score: r.score, model: r.usage.model, profileVersion: profile.version });
+    return r.usage;
+  }
+
+  private notifyScored(ids: number[], settings: Settings): void {
+    if (!settings.notificationsEnabled || ids.length === 0) return;
+    const { store, notifier } = this.deps;
+    const hits = ids
+      .map((id) => store.getVacancy(id))
+      .filter(
+        (v): v is VacancyRow =>
+          !!v && v.score !== null && v.score >= settings.notifyThreshold && v.bucket !== "knockout" && v.notifiedAt === null,
+      )
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    if (hits.length === 0) return;
+    const nowIso = this.deps.now().toISOString();
+    if (hits.length <= 3) {
+      for (const v of hits) {
+        notifier.notify({
+          title: `${v.score} · ${v.title}`,
+          body: [v.organization, v.location].filter(Boolean).join(" · "),
+          vacancyId: v.id,
+        });
+      }
+    } else {
+      notifier.notify({
+        title: `${hits.length} new strong matches`,
+        body: hits
+          .slice(0, 3)
+          .map((v) => v.title)
+          .join("\n"),
+      });
+    }
+    for (const v of hits) store.markNotified(v.id, nowIso);
+  }
+
+  /** Scores (or re-scores) one vacancy, fetching its detail page first when needed. Throws on failure. */
+  async scoreOne(vacancyId: number): Promise<void> {
+    const { store, llm } = this.deps;
+    const row = store.getVacancy(vacancyId);
+    if (!row) throw new Error("Vacancy not found");
+    const settings = store.getSettings();
+    if (!llm || (this.deps.llmConfigured && !this.deps.llmConfigured())) {
+      throw new Error("No Anthropic API key configured. Add one in Settings.");
+    }
+    const profile = store.getProfile();
+    if (!profile.markdown.trim()) throw new Error("The profile is empty. Fill in your profile first.");
+    if (this.budgetExceeded(settings)) throw new Error("Monthly budget reached. Raise it in Settings.");
+
+    let current = row;
+    if (!current.description) {
+      const source = store.getSource(current.sourceId);
+      const mode: Mode = source?.renderMode === "browser" ? "browser" : source?.renderMode === "auto" ? (source.detectedMode ?? "static") : "static";
+      await this.fetchDetail(current, mode);
+      current = store.getVacancy(vacancyId)!;
+      if (!current.description) throw new Error(current.scoreError ?? "Could not fetch the vacancy text");
+    }
+    try {
+      await this.scoreRow(llm, settings, profile, current, this.feedbackHints());
+    } catch (e) {
+      if (!(e instanceof BudgetExceededError || e instanceof LlmNotConfiguredError)) {
+        store.setScoreState(vacancyId, "error", { error: errMsg(e) });
+      }
+      throw e;
+    } finally {
+      this.deps.emit("vacancies.changed", { newIds: [] });
+    }
+  }
+
+  // ---------- test ----------
+
+  async testSource(input: { url: string; renderMode: RenderMode; maxPages: number }): Promise<SourceTestResult> {
+    const { fetcher } = this.deps;
+    const settings = this.deps.store.getSettings();
+    let cost = 0;
+    const base = this.llmUsable(settings);
+    const metered: LlmClient | null = base
+      ? {
+          structured: async (req) => {
+            const r = await base.structured(req);
+            cost += r.usage.costUsd;
+            return r;
+          },
+          text: async (req) => {
+            const r = await base.text(req);
+            cost += r.usage.costUsd;
+            return r;
+          },
+        }
+      : null;
+    const result = (over: Partial<SourceTestResult>): SourceTestResult => ({
+      ok: false,
+      error: null,
+      modeUsed: input.renderMode === "browser" ? "browser" : "static",
+      strategy: null,
+      recipe: null,
+      items: [],
+      robotsAllowed: true,
+      llmCostUsd: cost,
+      ...over,
+    });
+    try {
+      if (!(await fetcher.isAllowed(input.url))) {
+        return result({ error: "Blocked by robots.txt", robotsAllowed: false });
+      }
+      const out = await this.fetchAndExtract({
+        url: input.url,
+        renderMode: input.renderMode,
+        detectedMode: null,
+        maxPages: Math.min(5, Math.max(1, input.maxPages || 1)),
+        existingRecipe: null,
+        lastStrategy: null,
+        lastPageHash: null,
+        settings,
+        llm: metered,
+      });
+      return result({
+        ok: out.items.length > 0,
+        error: out.items.length > 0 ? null : metered ? "No vacancies found on the page" : "No vacancies found without an API key (only feeds, JSON-LD and saved recipes were tried)",
+        modeUsed: out.modeUsed,
+        strategy: out.strategy,
+        recipe: out.recipe,
+        items: out.items.slice(0, 50),
+      });
+    } catch (e) {
+      return result({ error: errMsg(e) });
+    }
+  }
+}

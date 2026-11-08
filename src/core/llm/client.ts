@@ -194,9 +194,18 @@ export class AnthropicLlmClient implements LlmClient {
       throw new RefusalError(`The model declined to answer${cat ? ` (${cat})` : ""}`);
     }
     if (res.stop_reason === "max_tokens") throw new Error("response truncated");
-    const block = res.content.find((b) => b.type === "text");
-    if (!block || typeof block.text !== "string") throw new Error("Model returned no text");
-    return { text: block.text, usage };
+    // A declined model's partial text can precede a "fallback" block: only the blocks after the last one count.
+    let lastFallback = -1;
+    res.content.forEach((b, i) => {
+      if (b.type === "fallback") lastFallback = i;
+    });
+    const text = res.content
+      .slice(lastFallback + 1)
+      .filter((b) => b.type === "text" && typeof b.text === "string")
+      .map((b) => b.text as string)
+      .join("");
+    if (!text) throw new Error("Model returned no text");
+    return { text, usage };
   }
 
   private makeUsage(model: string, u: BetaResponse["usage"]): LlmUsage {

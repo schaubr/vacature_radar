@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { Feedback, VacancyDetail } from "../../shared/types";
 import { call, errMsg } from "../api";
-import { Bar, Icon, ScorePill } from "../components/ui";
-import { relativeTime } from "../util";
+import { Bar, Icon } from "../components/ui";
+import { BUCKET_LABEL, relativeTime } from "../util";
 
 const SUB: { key: "diploma" | "experience" | "skills" | "preferences"; label: string }[] = [
   { key: "diploma", label: "Diploma" },
@@ -151,7 +151,9 @@ export function VacancyDetailPane({
                 <span>/ 100</span>
               </div>
               <div className="score-meta">
-                <ScorePill item={v} />
+                <span className={`pill b-${r.bucket}`}>
+                  <span>{BUCKET_LABEL[r.bucket]}</span>
+                </span>
                 <span className="subtle">
                   {r.confidence} confidence · {v.scoreModel ?? "model unknown"} · {relativeTime(v.scoredAt)}
                 </span>

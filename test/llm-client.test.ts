@@ -132,6 +132,21 @@ describe("AnthropicLlmClient", () => {
     await expect(setup([ok('{"a":1}')]).client.structured(structuredReq())).rejects.toThrow();
   });
 
+  it("uses only the text after the last fallback block", async () => {
+    const res = {
+      stop_reason: "end_turn",
+      content: [
+        { type: "text", text: "partial declined" },
+        { type: "fallback", from: "x" },
+        { type: "text", text: '{"a":"x",' },
+        { type: "text", text: '"n":2}' },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    };
+    const { data } = await setup([res]).client.structured(structuredReq());
+    expect(data).toEqual({ a: "x", n: 2 });
+  });
+
   it("sends beta fallbacks for Opus and Sonnet, not for Haiku", async () => {
     for (const model of ["claude-opus-5-5", "claude-sonnet-5-5"] as ModelId[]) {
       const { client, calls } = setup([ok('{"a":"x","n":1}')]);

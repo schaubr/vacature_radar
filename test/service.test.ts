@@ -1,0 +1,220 @@
+import { describe, expect, it, vi } from "vitest";
+import { strToU8, zipSync } from "fflate";
+import { Store } from "../src/core/db/store";
+import type { LlmClient } from "../src/core/llm/client";
+import { PoliteFetcher } from "../src/core/net/fetcher";
+import { ScanService } from "../src/core/scan/scanner";
+import { Scheduler } from "../src/core/scan/scheduler";
+import { seedSources, SEED_SOURCES } from "../src/core/seed";
+import { RadarService, type SecretsPort } from "../src/core/service";
+import { RADAR_METHODS, type RadarEvents } from "../src/shared/ipc";
+import { DEFAULT_PREFERENCES, type SourceInput } from "../src/shared/types";
+import { VVSG_RECIPE, VVSG_URL, fixture } from "./helpers";
+
+const srcInput = (over: Partial<SourceInput> = {}): SourceInput => ({
+  name: "VVSG", url: VVSG_URL, enabled: true, renderMode: "static", scanIntervalHours: null, maxPages: 1, notes: "", ...over,
+});
+
+function setup(opts: { key?: string | null; secureStorage?: boolean; file?: { path: string; data: Uint8Array } | null; llm?: LlmClient | null } = {}) {
+  const store = new Store(":memory:");
+  let key: string | null = opts.key === undefined ? null : opts.key;
+  const secrets: SecretsPort = {
+    get: () => key,
+    set: (k) => { key = k; },
+    clear: () => { key = null; },
+    available: () => opts.secureStorage !== false,
+  };
+  const events: { name: string; payload: unknown }[] = [];
+  const emit = <E extends keyof RadarEvents>(name: E, payload: RadarEvents[E]) => void events.push({ name, payload });
+  const raw = async (url: string) => {
+    if (url.endsWith("/robots.txt")) return { status: 404, url, contentType: "text/plain", body: "" };
+    return { status: 200, url, contentType: "text/html", body: url === VVSG_URL ? fixture("vvsg_list.html") : fixture("vvsg_detail.html") };
+  };
+  const fetcher = new PoliteFetcher(raw, { minIntervalMs: 0, sleep: async () => {} });
+  const now = () => new Date("2026-11-08T12:00:00Z");
+  const llm = opts.llm === undefined ? null : opts.llm;
+  const scanner = new ScanService({ store, fetcher, renderer: null, llm, notifier: { notify: () => {} }, now, emit, llmConfigured: () => key !== null });
+  const scheduler = new Scheduler({ store, scanner, now });
+  const opened: string[] = [];
+  const onSettingsChanged = vi.fn();
+  const validateKey = vi.fn(async (k: string) => { if (k === "bad") throw new Error("Invalid API key"); });
+  const service = new RadarService({
+    store, scanner, scheduler, llm, secrets, now, emit, onSettingsChanged, validateKey,
+    shell: { openExternal: (u) => opened.push(u), pickImportFile: async () => opts.file ?? null },
+  });
+  const names = () => events.map((e) => e.name);
+  return { store, service, events, names, opened, onSettingsChanged, validateKey, getKey: () => key };
+}
+
+describe("RadarService", () => {
+  it("implements every RadarApi method", () => {
+    const { service } = setup();
+    for (const m of RADAR_METHODS) expect(typeof service[m], m).toBe("function");
+  });
+
+  it("seeds only into an empty sources table", () => {
+    const { store } = setup();
+    expect(seedSources(store)).toBe(SEED_SOURCES.length);
+    expect(seedSources(store)).toBe(0);
+    const list = store.listSources();
+    expect(list).toHaveLength(6);
+    expect(list.filter((s) => s.enabled).map((s) => s.renderMode)).toEqual(["browser", "browser", "static", "static"]);
+    expect(list.filter((s) => !s.enabled).every((s) => s.renderMode === "auto" && /Use Test before enabling/.test(s.notes))).toBe(true);
+  });
+
+  it("sources CRUD emits events; update resets learned state; delete removes vacancies", async () => {
+    const { service, names, store } = setup();
+    const s = service["sources.create"](srcInput());
+    expect(names()).toContain("sources.changed");
+    expect(service["sources.list"]()).toHaveLength(1);
+    store.updateSourceRuntime(s.id, { recipe: VVSG_RECIPE, strategy: "recipe", detectedMode: "static", lastPageHash: "h" });
+    expect(service["sources.update"](s.id, { name: "Renamed" }).recipe).not.toBeNull();
+    const moved = service["sources.update"](s.id, { url: "https://www.vvsg.be/elders" });
+    expect(moved.recipe).toBeNull();
+    expect(moved.detectedMode).toBeNull();
+    store.updateSourceRuntime(s.id, { recipe: VVSG_RECIPE, strategy: "recipe", lastPageHash: "h" });
+    const reset = service["sources.resetRecipe"](s.id);
+    expect(reset).toMatchObject({ recipe: null, strategy: null, lastPageHash: null });
+    expect(() => service["sources.update"](999, { name: "x" })).toThrow(/not found/);
+
+    const s2 = service["sources.create"](srcInput({ url: VVSG_URL }));
+    store.updateSourceRuntime(s2.id, { recipe: VVSG_RECIPE });
+    await service["scan.now"](s2.id);
+    await vi.waitFor(() => expect(store.getSource(s2.id)!.lastStatus).toBe("ok"));
+    expect(service["vacancies.list"]({ statuses: [], minScore: null, sourceId: null, search: "", includeUnscored: true, sort: "date" }).length).toBeGreaterThan(0);
+    service["sources.delete"](s2.id);
+    expect(service["vacancies.list"]({ statuses: [], minScore: null, sourceId: s2.id, search: "", includeUnscored: true, sort: "date" })).toHaveLength(0);
+    expect(store.getVacancyByUrl("https://www.vvsg.be/vacatures/overzicht-vacatures/lennik-expert-financien")).toBeNull();
+  });
+
+  it("scan.now(null) scans enabled sources and emits app.status; sources.test works", async () => {
+    const { service, store, names } = setup();
+    const a = service["sources.create"](srcInput());
+    service["sources.create"](srcInput({ name: "off", enabled: false }));
+    store.updateSourceRuntime(a.id, { recipe: VVSG_RECIPE });
+    service["scan.now"](null);
+    await vi.waitFor(() => expect(store.getSource(a.id)!.lastStatus).toBe("ok"));
+    await vi.waitFor(() => expect(service["app.status"]().scanning).toBe(false));
+    expect(names()).toContain("app.status");
+    expect(store.listSources().find((s) => s.name === "off")!.lastStatus).toBe("never");
+    const t = await service["sources.test"]({ url: VVSG_URL, renderMode: "static", maxPages: 1 });
+    expect(t).toMatchObject({ ok: false, items: [], robotsAllowed: true });
+    expect(t.error).toMatch(/No vacancies/); // no recipe, no key: only non-LLM tiers ran
+  });
+
+  it("vacancies: get marks seen, status, feedback, counts, openExternal, rescore errors", async () => {
+    const { service, store, opened, names } = setup();
+    const s = service["sources.create"](srcInput());
+    store.updateSourceRuntime(s.id, { recipe: VVSG_RECIPE });
+    await service["scan.now"](s.id);
+    await vi.waitFor(() => expect(store.getSource(s.id)!.lastStatus).toBe("ok"));
+    const list = service["vacancies.list"]({ statuses: [], minScore: null, sourceId: null, search: "", includeUnscored: true, sort: "date" });
+    expect(service["vacancies.counts"]().new).toBe(list.length);
+    const d = service["vacancies.get"](list[0].id)!;
+    expect(d.status).toBe("seen");
+    expect(service["vacancies.counts"]().new).toBe(list.length - 1);
+    service["vacancies.setStatus"](list[0].id, "interested");
+    service["vacancies.setFeedback"](list[0].id, "up", "nice");
+    const d2 = service["vacancies.get"](list[0].id)!;
+    expect(d2).toMatchObject({ status: "interested", feedback: "up", feedbackNote: "nice" });
+    expect(service["vacancies.get"](99999)).toBeNull();
+    service["vacancies.openExternal"](list[0].id);
+    expect(opened).toEqual([d2.url]);
+    await expect(service["vacancies.rescore"](list[0].id)).rejects.toThrow(/API key/);
+    expect(names()).toContain("vacancies.changed");
+  });
+
+  it("profile save/import (zip) preserves preferences and emits app.status", async () => {
+    const zip = zipSync({ "Profile.csv": strToU8("First Name,Headline\nJane,Social worker\n") });
+    const { service, events, store } = setup({ file: { path: "/x/Basic_LinkedInDataExport.zip", data: zip } });
+    expect(service["app.status"]().profileReady).toBe(false);
+    const prefs = { ...DEFAULT_PREFERENCES, homeLocation: "Gent" };
+    const saved = service["profile.save"]({ markdown: "hello", preferences: prefs });
+    expect(saved).toMatchObject({ version: 1, importedFrom: "manual" });
+    expect(events.at(-1)).toMatchObject({ name: "app.status", payload: { profileReady: true } });
+    const imported = (await service["profile.import"]())!;
+    expect(imported.markdown).toContain("Headline: Social worker");
+    expect(imported.importedFrom).toBe("linkedin_zip");
+    expect(imported.preferences.homeLocation).toBe("Gent");
+    expect(imported.version).toBe(2);
+    expect(store.getProfile().version).toBe(2);
+  });
+
+  it("profile.import: cancel -> null, pdf needs a key, other types are rejected, pdf works with key", async () => {
+    expect(await setup()["service"]["profile.import"]()).toBeNull();
+
+    const pdf = { path: "/x/Profile.PDF", data: new Uint8Array([1, 2, 3]) };
+    const noKey = setup({ file: pdf });
+    await expect(noKey.service["profile.import"]()).rejects.toThrow(/API key/);
+
+    const llm: LlmClient = {
+      structured: async () => { throw new Error("unused"); },
+      text: async () => ({ text: "# Jane\nSocial worker", usage: { model: "m", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 } }),
+    };
+    const withKey = setup({ file: pdf, key: "sk-ant-xxx", llm });
+    const p = (await withKey.service["profile.import"]())!;
+    expect(p).toMatchObject({ markdown: "# Jane\nSocial worker", importedFrom: "linkedin_pdf" });
+
+    const txt = setup({ file: { path: "/x/a.txt", data: new Uint8Array() } });
+    await expect(txt.service["profile.import"]()).rejects.toThrow(/Unsupported/);
+  });
+
+  it("settings.save returns merged settings, calls onSettingsChanged and emits app.status", () => {
+    const { service, onSettingsChanged, events } = setup();
+    const s = service["settings.save"]({ monthlyBudgetUsd: 9, launchAtLogin: false });
+    expect(s.monthlyBudgetUsd).toBe(9);
+    expect(s.notifyThreshold).toBe(70);
+    expect(service["settings.get"]()).toEqual(s);
+    expect(onSettingsChanged).toHaveBeenCalledWith(s, { monthlyBudgetUsd: 9, launchAtLogin: false });
+    expect(events.at(-1)!.name).toBe("app.status");
+  });
+
+  it("apiKey set/status/clear with validation and secure storage failure", async () => {
+    const t = setup();
+    expect(t.service["apiKey.status"]()).toEqual({ configured: false, masked: null });
+    expect(await t.service["apiKey.set"]("   ")).toMatchObject({ ok: false });
+    expect(await t.service["apiKey.set"]("bad")).toEqual({ ok: false, error: "Invalid API key" });
+    expect(t.getKey()).toBeNull();
+    expect(await t.service["apiKey.set"]("sk-ant-api03-abcdefghijklmnop")).toEqual({ ok: true, error: null });
+    const st = t.service["apiKey.status"]();
+    expect(st.configured).toBe(true);
+    expect(st.masked).toBe("sk-ant-…mnop");
+    expect(st.masked).not.toContain("abcdefgh");
+    expect(t.events.at(-1)).toMatchObject({ name: "app.status", payload: { apiKeyConfigured: true } });
+    t.service["apiKey.clear"]();
+    expect(t.service["apiKey.status"]().configured).toBe(false);
+    expect(t.events.at(-1)).toMatchObject({ payload: { apiKeyConfigured: false } });
+
+    const noSec = setup({ secureStorage: false });
+    expect(await noSec.service["apiKey.set"]("sk-ant-api03-abcdefghijklmnop")).toEqual({
+      ok: false,
+      error: "Secure storage is not available on this system",
+    });
+    expect(noSec.validateKey).not.toHaveBeenCalled();
+    // the rest of the service keeps working
+    expect(noSec.service["settings.get"]().scanIntervalHours).toBe(6);
+  });
+
+  it("usage.summary, log.list and app.status", () => {
+    const { service, store } = setup();
+    store.recordUsage({ model: "m", purpose: "score", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 6, at: "2026-11-03T00:00:00.000Z" });
+    store.log("info", "hello");
+    expect(service["usage.summary"]()).toMatchObject({ monthUsd: 6, budgetUsd: 5, budgetExceeded: true });
+    expect(service["log.list"](10)[0].message).toBe("hello");
+    expect(service["app.status"]()).toMatchObject({ scanning: false, budgetExceeded: true, apiKeyConfigured: false, profileReady: false, nextScanAt: null });
+    service["sources.create"](srcInput());
+    expect(service["app.status"]().nextScanAt).toBe("2026-11-08T12:00:00.000Z");
+  });
+
+  it("emits app.status when the scanner status changes", async () => {
+    const { service, store, events } = setup();
+    const s = service["sources.create"](srcInput());
+    store.updateSourceRuntime(s.id, { recipe: VVSG_RECIPE });
+    events.length = 0;
+    service["scan.now"](s.id);
+    await vi.waitFor(() => expect(store.getSource(s.id)!.lastStatus).toBe("ok"));
+    await vi.waitFor(() => expect((events.filter((e) => e.name === "app.status").at(-1)!.payload as { scanning: boolean }).scanning).toBe(false));
+    const statuses = events.filter((e) => e.name === "app.status").map((e) => e.payload as { scanning: boolean; currentSourceId: number | null });
+    expect(statuses.some((x) => x.scanning && x.currentSourceId === s.id)).toBe(true);
+  });
+});
