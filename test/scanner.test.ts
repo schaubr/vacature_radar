@@ -268,10 +268,68 @@ describe("ScanService", () => {
     e.routes.set(VVSG_URL, "<html><body><p>nothing</p></body></html>");
     await e.scanner.scanSource(id);
     expect(e.store.getSource(id)!.lastStatus).toBe("empty");
+    // Misses reached the limit, but the rows were seen less than 7 days ago: nothing closes yet.
     e.routes.set(VVSG_URL, partial);
     await e.scanner.scanSource(id);
+    expect(e.store.listVacancies({ statuses: ["closed"], minScore: null, sourceId: null, search: "", includeUnscored: true, sort: "date" })).toHaveLength(0);
+    // A user workflow state is never auto-closed.
+    const missing = all.filter((v) => !applyRecipe(partial, VVSG_URL, VVSG_RECIPE).some((i) => i.url === v.url));
+    e.store.setStatus(missing[0].id, "applied");
+    e.setNow("2026-11-17T10:00:00Z");
+    await e.scanner.scanSource(id);
+    expect(e.store.getVacancy(missing[0].id)!.status).toBe("applied");
     closed = e.store.listVacancies({ statuses: ["closed"], minScore: null, sourceId: null, search: "", includeUnscored: true, sort: "date" });
-    expect(closed).toHaveLength(all.length - 2);
+    expect(closed).toHaveLength(all.length - 2 - 1);
+  });
+
+  it("closes vacancies past their deadline at the end of a scan", async () => {
+    const e = mk();
+    e.llm.scoreFor = () => 50;
+    const id = e.addSource();
+    await e.scanner.scanSource(id);
+    const v = rows(e)[0];
+    const row = e.store.getVacancy(v.id)!;
+    e.store.saveScore(v.id, { fields: { ...row.fields!, deadline: "2026-11-01" }, score: row.scoreResult!, model: "m", profileVersion: 1 });
+    e.setNow("2026-11-09T10:00:00Z");
+    await e.scanner.scanSource(id);
+    expect(e.store.getVacancy(v.id)!.status).toBe("closed");
+  });
+
+  it("says why 0 items were found when there is no key or no budget", async () => {
+    const noKey = mk({ llm: false });
+    const id = noKey.addSource({ recipe: null });
+    await noKey.scanner.scanSource(id);
+    expect(noKey.store.getSource(id)!.lastError).toMatch(/Add an Anthropic API key/);
+    const broke = mk();
+    broke.store.recordUsage({ model: "m", purpose: "score", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 10, at: "2026-11-02T00:00:00.000Z" });
+    const bid = broke.addSource({ recipe: null });
+    await broke.scanner.scanSource(bid);
+    expect(broke.store.getSource(bid)!.lastError).toMatch(/monthly budget/);
+  });
+
+  it("scorePending scores the backlog, shares one run and yields to a running scan", async () => {
+    const e = mk({ profile: false });
+    const id = e.addSource();
+    await e.scanner.scanSource(id);
+    expect(rows(e).every((v) => v.scoreState === "pending")).toBe(true);
+    await e.scanner.scorePending(); // still no profile: quiet no-op
+    expect(e.llm.calls.score).toBeUndefined();
+    expect(e.store.listLog(50).filter((l) => /Scoring skipped/.test(l.message))).toHaveLength(1);
+    e.store.saveProfile({ markdown: "profile", preferences: e.store.getProfile().preferences });
+    e.events.length = 0;
+    const p1 = e.scanner.scorePending();
+    const p2 = e.scanner.scorePending();
+    expect(p2).toBe(p1);
+    await p1;
+    expect(rows(e).every((v) => v.scoreState === "scored")).toBe(true);
+    expect(e.llm.calls.score).toBe(N);
+    expect(e.events).toContain("vacancies.changed");
+    expect(e.notes).toHaveLength(1); // summary notification for the strong matches
+    // while a scan queue runs, scorePending does nothing
+    const scan = e.scanner.scanMany([id]);
+    await e.scanner.scorePending();
+    await scan;
+    expect(e.llm.calls.score).toBe(N);
   });
 
   it("stops on robots.txt disallow", async () => {

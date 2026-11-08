@@ -382,22 +382,49 @@ export class Store {
     );
   }
 
-  markMissed(sourceId: number, seenIds: number[], closeAfter: number): number[] {
+  /**
+   * Increments missed_scans for every non-closed row of the source that is not in `seenIds`. A row is only
+   * auto-closed when its status is new/seen (never interested/applied/dismissed), it reached `closeAfter`
+   * misses AND it was last seen at least 7 days before `now` (listing pages re-sort, so a still-open
+   * vacancy can drop off page 1 for a while). Returns the closed ids.
+   */
+  markMissed(sourceId: number, seenIds: number[], closeAfter: number, now: Date = new Date()): number[] {
+    const cutoff = new Date(now.getTime() - 7 * 86_400_000).toISOString();
     return this.tx(() => {
       const seen = new Set(seenIds);
       const candidates = this.all(
-        "SELECT id, missed_scans FROM vacancies WHERE source_id = ? AND status != 'closed'",
+        "SELECT id, missed_scans, status, last_seen_at FROM vacancies WHERE source_id = ? AND status != 'closed'",
         sourceId,
       ).filter((r) => !seen.has(Number(r.id)));
       const closed: number[] = [];
       for (const r of candidates) {
         const id = Number(r.id);
         const missed = Number(r.missed_scans) + 1;
-        if (missed >= closeAfter) {
+        const closable = (r.status === "new" || r.status === "seen") && str(r.last_seen_at) <= cutoff;
+        if (missed >= closeAfter && closable) {
           this.run("UPDATE vacancies SET missed_scans = ?, status = 'closed' WHERE id = ?", missed, id);
           closed.push(id);
         } else {
           this.run("UPDATE vacancies SET missed_scans = ? WHERE id = ?", missed, id);
+        }
+      }
+      return closed;
+    });
+  }
+
+  /** Closes new/seen vacancies whose scored deadline (YYYY-MM-DD) is before `today`. Returns the closed ids. */
+  closeExpired(today: string): number[] {
+    return this.tx(() => {
+      const closed: number[] = [];
+      const rows = this.all(
+        "SELECT id, fields_json FROM vacancies WHERE status IN ('new','seen') AND fields_json IS NOT NULL",
+      );
+      for (const r of rows) {
+        const f = parseJson<{ deadline?: string }>(r.fields_json);
+        const d = f?.deadline?.trim() ?? "";
+        if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d < today) {
+          this.run("UPDATE vacancies SET status = 'closed' WHERE id = ?", Number(r.id));
+          closed.push(Number(r.id));
         }
       }
       return closed;

@@ -26,20 +26,14 @@
     "mac": {
       "target": [
         {
-          "target": "dmg",
-          "arch": [
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
+          "target": "dir",
           "arch": [
             "arm64"
           ]
         }
       ],
       "category": "public.app-category.productivity",
-      "identity": null,
+      "identity": "-",
       "hardenedRuntime": false
     }
   },

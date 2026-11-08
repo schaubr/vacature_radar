@@ -59,6 +59,9 @@ describe("RadarService", () => {
     const list = store.listSources();
     expect(list).toHaveLength(6);
     expect(list.filter((s) => s.enabled).map((s) => s.renderMode)).toEqual(["browser", "browser", "static", "static"]);
+    const withRecipe = list.filter((s) => s.recipe);
+    expect(withRecipe.map((s) => s.strategy)).toEqual(["recipe", "recipe", "recipe", "recipe"]);
+    expect(list.filter((s) => !s.enabled).every((s) => s.recipe === null)).toBe(true);
     expect(list.filter((s) => !s.enabled).every((s) => s.renderMode === "auto" && /Use Test before enabling/.test(s.notes))).toBe(true);
   });
 
@@ -193,6 +196,25 @@ describe("RadarService", () => {
     expect(noSec.validateKey).not.toHaveBeenCalled();
     // the rest of the service keeps working
     expect(noSec.service["settings.get"]().scanIntervalHours).toBe(6);
+  });
+
+  it("triggers scoring of pending vacancies after key, profile and budget changes", async () => {
+    const t = setup();
+    const spy = vi.spyOn((t.service as unknown as { d: { scanner: { scorePending: () => Promise<void> } } }).d.scanner, "scorePending");
+    await t.service["apiKey.set"]("sk-ant-api03-abcdefghijklmnop");
+    expect(spy).toHaveBeenCalledTimes(1);
+    await t.service["apiKey.set"]("bad");
+    expect(spy).toHaveBeenCalledTimes(1);
+    t.service["profile.save"]({ markdown: "", preferences: DEFAULT_PREFERENCES });
+    expect(spy).toHaveBeenCalledTimes(1);
+    t.service["profile.save"]({ markdown: "text", preferences: DEFAULT_PREFERENCES });
+    expect(spy).toHaveBeenCalledTimes(2);
+    t.service["settings.save"]({ monthlyBudgetUsd: 1 });
+    expect(spy).toHaveBeenCalledTimes(2);
+    t.service["settings.save"]({ monthlyBudgetUsd: 20 });
+    expect(spy).toHaveBeenCalledTimes(3);
+    t.service["settings.save"]({ notifyThreshold: 80 });
+    expect(spy).toHaveBeenCalledTimes(3);
   });
 
   it("usage.summary, log.list and app.status", () => {

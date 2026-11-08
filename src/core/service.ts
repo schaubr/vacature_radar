@@ -89,6 +89,11 @@ export class RadarService implements RadarApi {
     };
   }
 
+  /** Score whatever was waiting for a key, profile or budget. Fire and forget. */
+  private rescoreSoon(): void {
+    void this.d.scanner.scorePending().catch(() => undefined);
+  }
+
   emitStatus(): void {
     try {
       this.d.emit("app.status", this.computeStatus());
@@ -215,6 +220,7 @@ export class RadarService implements RadarApi {
     const current = this.d.store.getProfile();
     const p = this.d.store.saveProfile({ ...input, importedFrom: current.importedFrom ?? "manual" });
     this.emitStatus();
+    if (p.markdown.trim()) this.rescoreSoon();
     return p;
   }
 
@@ -243,6 +249,7 @@ export class RadarService implements RadarApi {
       importedFrom,
     });
     this.emitStatus();
+    if (p.markdown.trim()) this.rescoreSoon();
     return p;
   }
 
@@ -253,6 +260,7 @@ export class RadarService implements RadarApi {
   }
 
   "settings.save"(patch: Partial<Settings>): Settings {
+    const before = this.d.store.getSettings();
     const merged = this.d.store.saveSettings(patch);
     try {
       this.d.onSettingsChanged?.(merged, patch);
@@ -260,6 +268,7 @@ export class RadarService implements RadarApi {
       this.d.store.log("warn", `Applying settings failed: ${e instanceof Error ? e.message : String(e)}`);
     }
     this.emitStatus();
+    if (patch.monthlyBudgetUsd !== undefined && merged.monthlyBudgetUsd > before.monthlyBudgetUsd) this.rescoreSoon();
     return merged;
   }
 
@@ -283,6 +292,7 @@ export class RadarService implements RadarApi {
       return { ok: false, error: e instanceof Error ? e.message : SECURE_STORAGE_ERROR };
     }
     this.emitStatus();
+    this.rescoreSoon();
     return { ok: true, error: null };
   }
 

@@ -230,12 +230,48 @@ describe("vacancies", () => {
     expect(store.getVacancy(a.id)!.missedScans).toBe(0);
     expect(store.getVacancy(o.id)!.missedScans).toBe(0);
     store.markMissed(sid, [a.id], 3);
-    expect(store.markMissed(sid, [a.id], 3)).toEqual([b.id]);
-    expect(store.getVacancy(b.id)).toMatchObject({ status: "closed", missedScans: 3 });
+    // Seen less than 7 days ago: counted, but not closed yet.
+    expect(store.markMissed(sid, [a.id], 3, new Date("2026-11-05T00:00:00Z"))).toEqual([]);
+    expect(store.getVacancy(b.id)).toMatchObject({ status: "new", missedScans: 3 });
+    expect(store.markMissed(sid, [a.id], 3, new Date("2026-11-09T00:00:00Z"))).toEqual([b.id]);
+    expect(store.getVacancy(b.id)).toMatchObject({ status: "closed", missedScans: 4 });
     // Already closed rows are not counted again.
-    expect(store.markMissed(sid, [a.id], 3)).toEqual([]);
-    expect(store.getVacancy(b.id)!.missedScans).toBe(3);
+    expect(store.markMissed(sid, [a.id], 3, new Date("2026-11-09T00:00:00Z"))).toEqual([]);
+    expect(store.getVacancy(b.id)!.missedScans).toBe(4);
     expect(store.getVacancy(a.id)!.status).toBe("new");
+  });
+
+  it("markMissed never closes interested/applied/dismissed rows", () => {
+    const late = new Date("2026-12-01T00:00:00Z");
+    const ids = (["interested", "applied", "dismissed", "seen"] as const).map((st) => {
+      const v = store.insertVacancy(nv(sid));
+      store.setStatus(v.id, st);
+      return v.id;
+    });
+    expect(store.markMissed(sid, [], 1, late)).toEqual([ids[3]]);
+    expect(ids.slice(0, 3).map((id) => store.getVacancy(id)!.status)).toEqual(["interested", "applied", "dismissed"]);
+    expect(store.getVacancy(ids[1])!.missedScans).toBe(1);
+  });
+
+  it("closeExpired closes new/seen rows past their deadline only", () => {
+    const mk = (deadline: string, status: "new" | "applied" = "new") => {
+      const v = store.insertVacancy(nv(sid));
+      store.saveScore(v.id, {
+        fields: { summary: "", sector: "", isSocialSector: true, hours: "", contract: "", diplomaRequired: "", experienceRequired: "", payScale: "", deadline },
+        score: { score: 50, bucket: "possible", subscores: { diploma: 1, experience: 1, skills: 1, preferences: 1 }, reasons: [], gaps: [], knockoutReason: "", confidence: "high" },
+        model: "m",
+        profileVersion: 1,
+      });
+      store.setStatus(v.id, status);
+      return v.id;
+    };
+    const past = mk("2026-11-01");
+    const today = mk("2026-11-08");
+    const none = mk("");
+    const applied = mk("2026-10-01", "applied");
+    const unscored = store.insertVacancy(nv(sid)).id;
+    expect(store.closeExpired("2026-11-08")).toEqual([past]);
+    expect([today, none, applied, unscored].map((id) => store.getVacancy(id)!.status)).toEqual(["new", "new", "applied", "new"]);
   });
 
   it("findDuplicateCandidate honours key, exclusion, closed, canonical-only and 60-day window", () => {

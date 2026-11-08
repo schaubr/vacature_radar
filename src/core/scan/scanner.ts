@@ -56,6 +56,7 @@ export class ScanService {
   private queue: number[] = [];
   private current: number | null = null;
   private running: Promise<void> | null = null;
+  private scoring: Promise<void> | null = null;
   private statusListener: (() => void) | null = null;
 
   constructor(private readonly deps: ScanDeps) {}
@@ -100,6 +101,8 @@ export class ScanService {
 
   private async drain(): Promise<void> {
     try {
+      // A standalone scoring run must not overlap with a scan queue.
+      if (this.scoring) await this.scoring.catch(() => undefined);
       while (this.queue.length > 0) {
         const id = this.queue.shift()!;
         await this.scanSource(id);
@@ -123,6 +126,18 @@ export class ScanService {
 
   private budgetExceeded(settings: Settings): boolean {
     return this.deps.store.monthUsageUsd(this.deps.now()) >= settings.monthlyBudgetUsd;
+  }
+
+  /** Why a scan with 0 items found nothing, mentioning a missing key or exhausted budget when that is the likely cause. */
+  private noItemsMessage(settings: Settings): string {
+    const { llm, llmConfigured } = this.deps;
+    if (!llm || (llmConfigured && !llmConfigured())) {
+      return "No vacancies found. Add an Anthropic API key so Claude can learn this page's layout.";
+    }
+    if (this.budgetExceeded(settings)) {
+      return "No vacancies found, and the monthly budget is reached, so Claude could not learn this page's layout.";
+    }
+    return "No vacancies found on the page";
   }
 
   private llmUsable(settings: Settings): LlmClient | null {
@@ -263,6 +278,15 @@ export class ScanService {
     } catch (e) {
       // doScan handles its own errors; this is the last line of defence for the queue.
       this.log("error", `Scan crashed: ${errMsg(e)}`, sourceId);
+    }
+    try {
+      const closed = this.deps.store.closeExpired(this.deps.now().toISOString().slice(0, 10));
+      if (closed.length > 0) {
+        this.log("info", `${closed.length} vacancies past their deadline were closed`, sourceId);
+        this.deps.emit("vacancies.changed", { newIds: [] });
+      }
+    } catch {
+      /* store closed */
     } finally {
       this.current = null;
       this.changed();
@@ -332,7 +356,7 @@ export class ScanService {
         this.deps.emit("sources.changed", {});
         return;
       }
-      fail("No vacancies found on the page", "empty");
+      fail(this.noItemsMessage(settings), "empty");
       return;
     }
 
@@ -364,7 +388,7 @@ export class ScanService {
       newIds = fresh.map((r) => r.id);
 
       // 8. missed / closing (only reached after a successful extraction)
-      const closed = store.markMissed(sourceId, seenIds, settings.closeAfterMissedScans);
+      const closed = store.markMissed(sourceId, seenIds, settings.closeAfterMissedScans, now);
       if (closed.length > 0) this.log("info", `${closed.length} vacancies no longer listed were closed`, sourceId);
 
       // 9. prefilter + detail
@@ -447,7 +471,7 @@ export class ScanService {
   }
 
   /** Scores pending vacancies serially. Returns ids scored in this run. */
-  private async runScoringQueue(settings: Settings, sourceId: number | null): Promise<number[]> {
+  private async runScoringQueue(settings: Settings, sourceId: number | null, quiet = false): Promise<number[]> {
     const { store, llm } = this.deps;
     const pending = store.pendingScoring(50);
     if (pending.length === 0) return [];
@@ -457,7 +481,7 @@ export class ScanService {
     else if (!profile.markdown.trim()) reason = "profile is empty";
     else if (this.budgetExceeded(settings)) reason = "monthly budget reached";
     if (reason) {
-      this.log("warn", `Scoring skipped (${reason}); ${pending.length} vacancies stay pending`, sourceId);
+      if (!quiet) this.log("warn", `Scoring skipped (${reason}); ${pending.length} vacancies stay pending`, sourceId);
       return [];
     }
     const feedback = this.feedbackHints();
@@ -507,6 +531,34 @@ export class ScanService {
     );
     store.saveScore(row.id, { fields: r.fields, score: r.score, model: r.usage.model, profileVersion: profile.version });
     return r.usage;
+  }
+
+  /**
+   * Scores all pending vacancies now (after a key, profile or budget change) instead of waiting for the next scan.
+   * Does nothing while a scan queue runs (it scores at its end); concurrent calls share one run.
+   */
+  scorePending(): Promise<void> {
+    if (this.scoring) return this.scoring;
+    if (this.running) return Promise.resolve();
+    const run = (async () => {
+      try {
+        const settings = this.deps.store.getSettings();
+        const ids = await this.runScoringQueue(settings, null, true);
+        if (ids.length > 0) {
+          this.log("info", `Scored ${ids.length} pending vacancies`);
+          this.notifyScored(ids, settings);
+          this.deps.emit("vacancies.changed", { newIds: [] });
+        }
+      } catch (e) {
+        this.log("error", `Scoring failed: ${errMsg(e)}`);
+      } finally {
+        this.scoring = null;
+        this.changed();
+      }
+    })();
+    this.scoring = run;
+    this.changed();
+    return run;
   }
 
   private notifyScored(ids: number[], settings: Settings): void {
@@ -623,7 +675,7 @@ export class ScanService {
       });
       return result({
         ok: out.items.length > 0,
-        error: out.items.length > 0 ? null : metered ? "No vacancies found on the page" : "No vacancies found without an API key (only feeds, JSON-LD and saved recipes were tried)",
+        error: out.items.length > 0 ? null : this.noItemsMessage(settings),
         modeUsed: out.modeUsed,
         strategy: out.strategy,
         recipe: out.recipe,
