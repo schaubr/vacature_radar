@@ -882,3 +882,145 @@ Required coverage:
 - scanner end-to-end with fake fetcher/renderer/llm on fixtures: new items inserted, duplicates linked,
   prefilter applied, cap respected, notifications batched, missed/closed logic, error paths.
 - scheduler: due computation, per-source interval override.
+
+---
+
+## 14. Travel time from home (added 2026-11-08)
+
+Owner's choice: **driving time via a routing API** (OpenRouteService, "ORS"), shown on every vacancy,
+sortable and filterable in the Inbox, and **fed into the AI score**. No hard cutoff before scoring.
+
+### 14.1 ORS API contract (verified from the official docs and the official JS client, Nov 2026)
+
+- Geocode: `GET https://api.openrouteservice.org/geocode/search?api_key=<KEY>&text=<urlencoded>&boundary.country=BE&size=1`
+  Response: GeoJSON FeatureCollection. `features[0].geometry.coordinates` is `[lon, lat]`;
+  `features[0].properties` has `label`, `confidence` (0..1), `layer` (e.g. `address`, `street`, `venue`,
+  `postalcode`, `locality`, `localadmin`, `county`, `region`, `macroregion`). Empty `features` = not found.
+- Matrix: `POST https://api.openrouteservice.org/v2/matrix/driving-car`, headers
+  `Authorization: <KEY>`, `Content-Type: application/json`, body
+  `{ "locations": [[lon,lat], ...], "sources": ["0"], "destinations": ["1","2",...], "metrics": ["duration","distance"], "units": "km" }`.
+  Response: `durations[0][i]` seconds, `distances[0][i]` km, `null` when a pair is unroutable.
+  Max 3500 source x destination pairs per request: send at most 50 destinations per call.
+- Free-plan quotas differ between official pages (roughly 500 to 10,000 per day depending on endpoint,
+  about 40 per minute for matrix). Design for few calls: cache every geocode forever, batch matrix calls,
+  throttle to one ORS request per 1600 ms. HTTP 401/403 = "invalid key or access denied",
+  429 = "ORS rate limit or daily quota reached" (stop this run, retry next scan). Never fail a scan because of ORS.
+- Durations are free-flow car times (no traffic). Say "by car, without traffic" in the UI and the prompt.
+
+### 14.2 Shared types and IPC (src/shared)
+
+```ts
+export type GeoState = "pending" | "ok" | "approximate" | "not_found" | "error" | "unavailable";
+// unavailable = no ORS key or no resolved home; approximate = only a region/province matched
+
+// VacancyListItem: add
+travelMinutes: number | null; travelKm: number | null; geoState: GeoState;
+// VacancyDetail: add
+geoQuery: string; geoLabel: string; geoError: string | null;
+// VacancyFilter: add
+maxTravelMinutes: number | null;   // rows with KNOWN travel above this are hidden; unknown travel stays visible
+sort: "score" | "date" | "distance"; // distance: ascending travelMinutes, unknown last
+// Profile: add
+homeGeo: { label: string; lat: number; lon: number } | null;
+homeGeoError: string | null;
+// AppStatus: add
+travelConfigured: boolean;          // ORS key stored AND homeGeo resolved
+```
+
+RadarApi additions:
+
+```ts
+"orsKey.status"(): { configured: boolean; masked: string | null };
+"orsKey.set"(key: string): Promise<{ ok: boolean; error: string | null }>; // validates by geocoding "Gent"
+"orsKey.clear"(): void;
+"travel.recompute"(): Promise<{ updated: number; failed: number }>;       // re-geocode home, (re)compute all non-closed vacancies
+```
+
+### 14.3 Storage (migration to user_version 2)
+
+```sql
+ALTER TABLE vacancies ADD COLUMN geo_query TEXT NOT NULL DEFAULT '';
+ALTER TABLE vacancies ADD COLUMN geo_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE vacancies ADD COLUMN geo_lat REAL;
+ALTER TABLE vacancies ADD COLUMN geo_lon REAL;
+ALTER TABLE vacancies ADD COLUMN geo_state TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE vacancies ADD COLUMN geo_error TEXT;
+ALTER TABLE vacancies ADD COLUMN travel_minutes REAL;
+ALTER TABLE vacancies ADD COLUMN travel_km REAL;
+ALTER TABLE vacancies ADD COLUMN travel_home_key TEXT;   -- normalized home query the travel was computed for
+ALTER TABLE profile ADD COLUMN home_query TEXT NOT NULL DEFAULT '';
+ALTER TABLE profile ADD COLUMN home_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE profile ADD COLUMN home_lat REAL;
+ALTER TABLE profile ADD COLUMN home_lon REAL;
+ALTER TABLE profile ADD COLUMN home_error TEXT;
+CREATE TABLE geo_cache(query TEXT PRIMARY KEY, found INTEGER NOT NULL, lat REAL, lon REAL,
+  label TEXT NOT NULL DEFAULT '', layer TEXT NOT NULL DEFAULT '', confidence REAL, at TEXT NOT NULL);
+```
+
+New Store methods: `getGeoCache(query)`, `putGeoCache(entry)`, `setHomeGeo({ query, label, lat, lon } | { query, error })`,
+`saveVacancyGeo(id, { query, label, lat, lon, state, error })`, `saveTravel(id, { minutes, km, homeKey })`,
+`clearTravel()` (all rows), `vacanciesNeedingGeo(limit)` (non-closed, duplicate_of NULL, geo_state 'pending'),
+`vacanciesNeedingTravel(homeKey, limit)` (geo_lat not null, state ok/approximate, travel_home_key IS NOT homeKey, non-closed).
+`listVacancies` implements `maxTravelMinutes` and `sort: "distance"`. Cache keys are normalized queries
+(lowercase, diacritics kept, whitespace collapsed).
+
+**Fix (existing bug):** `saveDetail` must only fill `organization` / `location` when the current value is empty.
+VDAB detail JSON-LD has only the province ("Oost-Vlaanderen") and currently overwrites the listing's town.
+`updateIdentity` (after scoring) keeps overwriting with non-empty values, but if it changes `location`,
+reset `geo_state` to 'pending' so travel is recomputed for the better location.
+
+### 14.4 Core modules (src/core/geo)
+
+- `ors.ts`: `export type JsonHttp = (url, init: { method: "GET" | "POST"; headers: Record<string,string>; body?: string; signal: AbortSignal }) => Promise<{ status: number; body: string }>`.
+  `class OrsClient { constructor(opts: { http: JsonHttp; getKey: () => string | null; minIntervalMs?: 1600; timeoutMs?: 20000; now?; sleep? }); geocode(text): Promise<GeoHit | null>; matrix(origin: LatLon, dests: LatLon[]): Promise<({ minutes: number; km: number } | null)[]> }`
+  with `GeoHit = { lat, lon, label, layer, confidence }`, `class OrsError extends Error { status: number | null; kind: "auth" | "quota" | "network" | "bad_response" }`.
+  `matrix` splits into chunks of 50 destinations and returns results in input order. Minutes rounded to integers, km to 1 decimal.
+- `locate.ts`: `locationQuery(v: { location: string; organization: string }): { query: string; fromOrganization: boolean } | null`.
+  Rules: use `location` when non-empty (strip "Provincie ", "Regio ", "Arrondissement " prefixes, uppercase-only text to title case,
+  drop text in parentheses). Otherwise derive from `organization` only when confident: take the part after the last " - "
+  ("Stad Nieuwpoort - Nieuwpoort" gives "Nieuwpoort", "VGC - Brussel" gives "Brussel"), or strip a known public-body prefix
+  ("Lokaal bestuur", "Gemeente", "Stad", "OCMW", "Zorgpunt", "Welzijnsvereniging", "Hulpverleningszone", "Politiezone", "AGB", "Gemeentebestuur", "Stadsbestuur")
+  when 1-3 words remain ("Lokaal bestuur Aalst" gives "Aalst"). Anything else returns null (never geocode a vzw name).
+  `classifyHit(hit, fromOrganization)`: accept when confidence >= 0.6; `layer` in region/macroregion/county gives "approximate";
+  for `fromOrganization` queries require layer locality/localadmin/borough, else treat as not found.
+- `travel.ts`: `class TravelService { constructor(deps: { store; ors: OrsClient; orsConfigured: () => boolean; now; log }); ensureHome(): Promise<boolean>; computeFor(ids?: number[]): Promise<{ updated; failed }>; recomputeAll(): Promise<{ updated; failed }> }`.
+  `ensureHome` geocodes `preferences.homeLocation` when the stored `home_query` differs or no coords (cache first) and stores the result.
+  `computeFor`: if not configured or no home, mark the given pending rows 'unavailable' and return. Else geocode rows needing geo
+  (cache first; not found and errors are cached per query too, as `found = 0`), then one batched matrix call for rows needing travel.
+  On OrsError kind auth/quota: log once, stop, leave rows pending. Rows whose state is 'unavailable' become 'pending' again once
+  ORS is configured (do this at the start of computeFor/recomputeAll). `recomputeAll` = `clearTravel` then ensureHome then compute everything non-closed.
+  Never throws to callers except programming errors.
+- `formatTravel(v): string` helper in `src/shared/travel.ts` (used by UI and prompt): "34 min by car, 41 km" (prefix "about " when approximate).
+
+### 14.5 Integration
+
+- Scanner: after step 9 (detail fetches), call `travel.computeFor(freshIds)` (catch + log). Also inside `scorePending()` and
+  before `scoreOne()` for that row. The scoring queue then sees travel data.
+- Scoring prompt: `buildScoringUser` gets an optional `travel` argument. When present add, right after the Location line:
+  `Travel from the candidate's home (<home label>): <formatTravel> (car, without traffic; computed by a routing service)`.
+  When approximate add "(only the region of the job is known)". Add to SCORING_ROLE (rubric, preferences): "When a Travel line
+  is present, use it for the commute part of the preferences subscore instead of estimating from place names. Compare it with the
+  candidate's stated maximum commute. Public-transport travel is usually slower than the car time given."
+- Service: `profile.save` / `profile.import`: if `homeLocation` changed, `void travel.recomputeAll()` then emit events.
+  `orsKey.set`: validate (geocode "Gent" through a temporary OrsClient with the candidate key; map auth errors to
+  "Invalid OpenRouteService API key"), store via a second SecretsPort, then `void travel.recomputeAll()`.
+  `orsKey.clear`: clear secret, mark non-closed rows 'unavailable' is NOT needed (keep last known travel). `travel.recompute` awaits recomputeAll.
+  `app.status.travelConfigured` = ORS key present AND profile.homeGeo not null.
+- Main: second `SafeStorageSecrets(userData, "ors-secret.bin")` (generalize the class with a filename parameter); `JsonHttp`
+  implemented with `net.fetch`. Pass `orsConfigured: () => orsSecrets.get() !== null`.
+- scan-cli: `geo <text>` and `travel <from> <to>` commands using env `ORS_API_KEY` and global fetch.
+
+### 14.6 UI
+
+- Inbox rows: after "organization · location" show a small car icon + "34 min" (title attribute with full `formatTravel`),
+  "≈ 50 min" when approximate, nothing when unknown.
+- Inbox toolbar: "Max drive" select (Any, 15, 30, 45, 60, 90 min) and "Distance" as a third sort option.
+- Detail: line under the location: "34 min by car, 41 km from Gent (without traffic)" plus muted "matched: Lendelede, West-Vlaanderen";
+  approximate adds "(region only)"; not_found shows "Could not place “<query>”"; unavailable shows
+  "Add an OpenRouteService key and your home location to see travel time" linking to Settings/Profile.
+- Profile: under Home location show the resolved label ("Resolved: Gent, Oost-Vlaanderen, BE") or the error, with the hint
+  "A street address is more precise than a town."
+- Settings: card "Travel time (OpenRouteService)": key input with Save (validates), masked key + Clear, short how-to
+  ("Free account at openrouteservice.org, then copy the API key from the dashboard"), "Recompute all travel times" button with result,
+  note "Car travel time without traffic. Free plan quotas are enough for normal use."
+- Mock: realistic travel data on most vacancies, one approximate, one not_found, one unavailable; orsKey and travel.recompute fakes.
