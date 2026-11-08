@@ -1,0 +1,66 @@
+{
+  "name": "vacature-radar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal menu-bar app that monitors Flemish social-sector job sites and scores vacancies with Claude",
+  "author": "Vacature Radar",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "npm run build && electron .",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "dist:mac": "npm run build && electron-builder --mac --arm64",
+    "scan-cli": "NODE_USE_ENV_PROXY=1 tsx scripts/scan-cli.ts"
+  },
+  "build": {
+    "appId": "local.vacatureradar",
+    "productName": "Vacature Radar",
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "hardenedRuntime": false
+    }
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "1.6.0",
+    "@types/node": "24.19.2",
+    "@types/papaparse": "5.5.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "cheerio": "1.2.0",
+    "electron": "44.10.2",
+    "electron-builder": "26.18.1",
+    "esbuild": "0.28.2",
+    "fflate": "0.8.3",
+    "papaparse": "5.7.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "robots-parser": "3.0.1",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12",
+    "zod": "4.6.7"
+  }
+}
