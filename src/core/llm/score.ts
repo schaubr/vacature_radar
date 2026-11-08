@@ -1,9 +1,9 @@
 import type { Bucket, Profile, ScoreResult, Settings, VacancyFields } from "../../shared/types";
 import type { LlmClient, LlmUsage } from "./client";
-import { buildScoringSystem, buildScoringUser, type FeedbackHint, type ScoringVacancyInput } from "./prompts";
+import { buildScoringSystem, buildScoringUser, type FeedbackHint, type ScoringTravel, type ScoringVacancyInput } from "./prompts";
 import { ScoreSchema, type ScoreOutput } from "./schemas";
 
-export type { FeedbackHint, ScoringVacancyInput };
+export type { FeedbackHint, ScoringTravel, ScoringVacancyInput };
 
 function clampInt(n: number): number {
   if (!Number.isFinite(n)) return 0;
@@ -73,6 +73,7 @@ export async function scoreVacancy(
   profile: Profile,
   vacancy: ScoringVacancyInput,
   feedback: FeedbackHint[],
+  travel?: ScoringTravel | null,
 ): Promise<{ fields: VacancyFields; score: ScoreResult; organization: string; location: string; usage: LlmUsage }> {
   const { data, usage } = await llm.structured({
     purpose: "score",
@@ -80,7 +81,7 @@ export async function scoreVacancy(
     effort: settings.effort,
     maxTokens: 6000,
     system: buildScoringSystem(profile, settings.outputLanguage),
-    user: buildScoringUser(vacancy, feedback),
+    user: buildScoringUser(vacancy, feedback, travel),
     schema: ScoreSchema,
   });
   return { ...postProcessScore(data), organization: data.organization.trim(), location: data.location.trim(), usage };

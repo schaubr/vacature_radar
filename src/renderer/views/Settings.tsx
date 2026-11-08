@@ -55,6 +55,13 @@ export function SettingsView({ shared }: { shared: Shared }) {
   const [keyMsg, setKeyMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [replace, setReplace] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const ors = useLoad(() => call("orsKey.status"), [shared.status.travelConfigured, shared.tick]);
+  const [orsInput, setOrsInput] = useState("");
+  const [orsBusy, setOrsBusy] = useState(false);
+  const [orsMsg, setOrsMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [orsReplace, setOrsReplace] = useState(false);
+  const [recomputing, setRecomputing] = useState(false);
+  const [recompute, setRecompute] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
     call("settings.get").then((v) => {
@@ -91,10 +98,41 @@ export function SettingsView({ shared }: { shared: Shared }) {
     }
   };
 
+  const saveOrsKey = async () => {
+    setOrsBusy(true);
+    setOrsMsg(null);
+    try {
+      const r = await call("orsKey.set", orsInput.trim());
+      if (r.ok) {
+        setOrsInput("");
+        setOrsReplace(false);
+        setOrsMsg({ tone: "ok", text: "Key verified and stored in the macOS keychain. Travel times are being calculated." });
+        ors.reload();
+      } else setOrsMsg({ tone: "err", text: r.error ?? "The key was rejected." });
+    } catch (e) {
+      setOrsMsg({ tone: "err", text: errMsg(e) });
+    } finally {
+      setOrsBusy(false);
+    }
+  };
+  const runRecompute = async () => {
+    setRecomputing(true);
+    setRecompute(null);
+    try {
+      const r = await call("travel.recompute");
+      setRecompute({ tone: r.updated === 0 && r.failed > 0 ? "err" : "ok", text: `${r.updated} updated, ${r.failed} failed` });
+    } catch (e) {
+      setRecompute({ tone: "err", text: errMsg(e) });
+    } finally {
+      setRecomputing(false);
+    }
+  };
+
   const u = usage.data;
   const maxDay = u ? Math.max(0.0001, ...u.last30Days.map((d) => d.usd)) : 1;
   const pct = u && u.budgetUsd > 0 ? Math.min(100, (u.monthUsd / u.budgetUsd) * 100) : 0;
   const configured = key.data?.configured ?? shared.status.apiKeyConfigured;
+  const orsConfigured = ors.data?.configured ?? false;
 
   return (
     <>
@@ -118,6 +156,33 @@ export function SettingsView({ shared }: { shared: Shared }) {
               </form>
             )}
             {keyMsg && <div className={`msg ${keyMsg.tone} block`} role="status">{keyMsg.text}</div>}
+          </section>
+
+          <section className="card">
+            <h3>Travel time (OpenRouteService)</h3>
+            <p className="subtle">
+              Free account at openrouteservice.org, then copy the API key from the dashboard. Car travel time without traffic. Free plan quotas are enough for normal use.
+            </p>
+            {orsConfigured && !orsReplace ? (
+              <div className="key-row">
+                <code className="masked">{ors.data?.masked ?? "••••••••"}</code>
+                <button className="btn" onClick={() => setOrsReplace(true)}>Replace</button>
+                <button className="btn danger-text" onClick={async () => { await call("orsKey.clear"); setOrsMsg(null); setRecompute(null); ors.reload(); }}>Clear</button>
+              </div>
+            ) : (
+              <form className="key-row" onSubmit={(e) => { e.preventDefault(); if (orsInput.trim()) void saveOrsKey(); }}>
+                <input type="password" autoComplete="off" spellCheck={false} placeholder="OpenRouteService API key" value={orsInput} onChange={(e) => setOrsInput(e.target.value)} aria-label="OpenRouteService API key" />
+                <button className="btn primary" type="submit" disabled={orsBusy || !orsInput.trim()}>{orsBusy ? "Checking…" : "Save"}</button>
+                {orsReplace && <button className="btn ghost" type="button" onClick={() => { setOrsReplace(false); setOrsInput(""); }}>Cancel</button>}
+              </form>
+            )}
+            {orsMsg && <div className={`msg ${orsMsg.tone} block`} role="status">{orsMsg.text}</div>}
+            <Row label="Recompute all travel times" hint="Looks up your home and every open vacancy again. Uses a few routing requests.">
+              <span className="recompute">
+                {recompute && <span className={`msg ${recompute.tone}`} role="status">{recompute.text}</span>}
+                <button className="btn" disabled={recomputing || !orsConfigured} onClick={runRecompute}>{recomputing ? "Recomputing…" : "Recompute"}</button>
+              </span>
+            </Row>
           </section>
 
           <section className="card">

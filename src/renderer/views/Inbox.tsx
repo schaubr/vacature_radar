@@ -3,6 +3,7 @@ import type { VacancyFilter, VacancyListItem, VacancyStatus } from "../../shared
 import { call } from "../api";
 import { Empty, Icon, ScorePill, Segmented, ViewHeader } from "../components/ui";
 import type { Shared } from "../App";
+import { formatTravel } from "../../shared/travel";
 import { isTypingTarget, relativeTime, useDebounced } from "../util";
 import { VacancyDetailPane } from "./VacancyDetail";
 
@@ -22,7 +23,8 @@ export function Inbox({ shared, focus }: { shared: Shared; focus: { id: number; 
   const [sourceId, setSourceId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [includeUnscored, setIncludeUnscored] = useState(true);
-  const [sort, setSort] = useState<"score" | "date">("score");
+  const [sort, setSort] = useState<"score" | "date" | "distance">("score");
+  const [maxDrive, setMaxDrive] = useState<number | null>(null);
   const [items, setItems] = useState<VacancyListItem[] | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [local, setLocal] = useState(0);
@@ -31,7 +33,7 @@ export function Inbox({ shared, focus }: { shared: Shared; focus: { id: number; 
   const selRef = useRef<number | null>(null);
   selRef.current = selected;
 
-  const filter: VacancyFilter = { statuses, minScore: minScore > 0 ? minScore : null, sourceId, search: dSearch.trim(), includeUnscored, sort };
+  const filter: VacancyFilter = { statuses, minScore: minScore > 0 ? minScore : null, sourceId, search: dSearch.trim(), includeUnscored, sort, maxTravelMinutes: maxDrive };
   const key = JSON.stringify(filter);
 
   useEffect(() => {
@@ -100,13 +102,14 @@ export function Inbox({ shared, focus }: { shared: Shared; focus: { id: number; 
   }, [act]);
 
   const toggleStatus = (s: VacancyStatus) => setStatuses((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
-  const filtersActive = statuses.length > 0 || minScore > 0 || sourceId != null || search !== "" || !includeUnscored;
+  const filtersActive = statuses.length > 0 || minScore > 0 || sourceId != null || search !== "" || !includeUnscored || maxDrive != null;
   const reset = () => {
     setStatuses([]);
     setMinScore(0);
     setSourceId(null);
     setSearch("");
     setIncludeUnscored(true);
+    setMaxDrive(null);
   };
 
   const setupCards = (
@@ -143,8 +146,14 @@ export function Inbox({ shared, focus }: { shared: Shared; focus: { id: number; 
       <ViewHeader title="Inbox" subtitle={items ? `${items.length} vacanc${items.length === 1 ? "y" : "ies"}` : undefined}>
         <label className="search">
           <Icon name="search" size={14} />
-          <input type="search" placeholder="Search title, employer, place" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search vacancies" />
+          <input type="search" placeholder="Search vacancies" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search vacancies" />
         </label>
+        <select className="drive-select" value={maxDrive ?? ""} onChange={(e) => setMaxDrive(e.target.value ? Number(e.target.value) : null)} aria-label="Max drive" title="Max drive (by car). Hides vacancies with a known drive time above this; unknown stays visible.">
+          <option value="">Max drive: any</option>
+          {[15, 30, 45, 60, 90].map((m) => (
+            <option key={m} value={m}>Max drive: {m} min</option>
+          ))}
+        </select>
         <Segmented
           label="Sort by"
           value={sort}
@@ -152,6 +161,7 @@ export function Inbox({ shared, focus }: { shared: Shared; focus: { id: number; 
           options={[
             { id: "score", label: "Score" },
             { id: "date", label: "Date" },
+            { id: "distance", label: "Distance" },
           ]}
         />
       </ViewHeader>
@@ -227,7 +237,7 @@ export function Inbox({ shared, focus }: { shared: Shared; focus: { id: number; 
         </section>
         <section className="detail-pane" aria-label="Vacancy detail">
           {selected != null ? (
-            <VacancyDetailPane id={selected} tick={tick + local} onChanged={() => setLocal((n) => n + 1)} onAct={act} />
+            <VacancyDetailPane go={shared.go} id={selected} tick={tick + local} onChanged={() => setLocal((n) => n + 1)} onAct={act} />
           ) : (
             <Empty icon="inbox" title="No vacancy selected">Pick one from the list to read the details.</Empty>
           )}
@@ -253,7 +263,14 @@ function Row({ v, selected, onSelect }: { v: VacancyListItem; selected: boolean;
       <div className="row-main">
         <div className={`row-title${isNew ? " bold" : ""}`}>{v.title}</div>
         <div className="row-sub">
-          {[v.organization, v.location].filter(Boolean).join(" · ") || "Unknown employer"}
+          <span className="row-sub-text">{[v.organization, v.location].filter(Boolean).join(" · ") || "Unknown employer"}</span>
+          {v.travelMinutes != null && (
+            <span className="travel" title={formatTravel(v)}>
+              <Icon name="car" size={13} />
+              {v.geoState === "approximate" ? "≈ " : ""}
+              {Math.round(v.travelMinutes)} min
+            </span>
+          )}
         </div>
         <div className="row-meta">
           <span>{v.sourceName}</span>

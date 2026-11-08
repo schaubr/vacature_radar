@@ -13,6 +13,7 @@ import type {
   VacancyStatus,
 } from "../shared/types";
 import type { Store } from "./db/store";
+import { OrsClient, OrsError, type JsonHttp } from "./geo/ors";
 import type { LlmClient } from "./llm/client";
 import { linkedinPdfToMarkdown } from "./profile/linkedin-pdf";
 import { linkedinZipToMarkdown } from "./profile/linkedin-zip";
@@ -45,6 +46,13 @@ export interface ServiceDeps {
   onSettingsChanged?: (settings: Settings, patch: Partial<Settings>) => void;
   /** Resolves when the key is valid, throws otherwise. Default: a tiny models.list call. */
   validateKey?: (key: string) => Promise<void>;
+  /** OpenRouteService key storage (second secret). Without it the ORS key is never configured. */
+  orsSecrets?: SecretsPort;
+  /** Travel computation; absent in contexts without routing. */
+  travel?: { recomputeAll(): Promise<{ updated: number; failed: number }> };
+  /** Resolves when the ORS key is valid, throws otherwise. Default: geocode "Gent" through `orsHttp`. */
+  validateOrsKey?: (key: string) => Promise<void>;
+  orsHttp?: JsonHttp;
 }
 
 export async function defaultValidateKey(key: string): Promise<void> {
@@ -65,9 +73,22 @@ const SECURE_STORAGE_ERROR = "Secure storage is not available on this system";
 
 export class RadarService implements RadarApi {
   private readonly validateKey: (key: string) => Promise<void>;
+  private readonly validateOrsKey: (key: string) => Promise<void>;
+
+  private async defaultValidateOrsKey(key: string): Promise<void> {
+    if (!this.d.orsHttp) throw new Error("OpenRouteService is not available");
+    const client = new OrsClient({ http: this.d.orsHttp, getKey: () => key, minIntervalMs: 0 });
+    try {
+      await client.geocode("Gent");
+    } catch (e) {
+      if (e instanceof OrsError && e.kind === "auth") throw new Error("Invalid OpenRouteService API key");
+      throw e;
+    }
+  }
 
   constructor(private readonly d: ServiceDeps) {
     this.validateKey = d.validateKey ?? defaultValidateKey;
+    this.validateOrsKey = d.validateOrsKey ?? ((k) => this.defaultValidateOrsKey(k));
     d.scanner.setStatusListener(() => this.emitStatus());
   }
 
@@ -78,6 +99,7 @@ export class RadarService implements RadarApi {
     const { store, scanner, scheduler, secrets, now } = this.d;
     const s = scanner.status;
     const settings = store.getSettings();
+    const profile = store.getProfile();
     return {
       scanning: s.scanning,
       currentSourceId: s.currentSourceId,
@@ -85,7 +107,8 @@ export class RadarService implements RadarApi {
       nextScanAt: scheduler.nextScanAt(now()),
       apiKeyConfigured: secrets.get() !== null,
       budgetExceeded: store.monthUsageUsd(now()) >= settings.monthlyBudgetUsd,
-      profileReady: store.getProfile().markdown.trim().length > 0,
+      profileReady: profile.markdown.trim().length > 0,
+      travelConfigured: this.d.orsSecrets?.get() != null && profile.homeGeo !== null,
     };
   }
 
@@ -219,9 +242,25 @@ export class RadarService implements RadarApi {
   "profile.save"(input: { markdown: string; preferences: Preferences }): Profile {
     const current = this.d.store.getProfile();
     const p = this.d.store.saveProfile({ ...input, importedFrom: current.importedFrom ?? "manual" });
+    this.recomputeIfHomeChanged(current, p);
     this.emitStatus();
     if (p.markdown.trim()) this.rescoreSoon();
     return p;
+  }
+
+  private recomputeIfHomeChanged(before: Profile, after: Profile): void {
+    if (before.preferences.homeLocation.trim() === after.preferences.homeLocation.trim()) return;
+    void this.recomputeTravel().catch(() => undefined);
+  }
+
+  private async recomputeTravel(): Promise<{ updated: number; failed: number }> {
+    if (!this.d.travel) return { updated: 0, failed: 0 };
+    try {
+      return await this.d.travel.recomputeAll();
+    } finally {
+      this.vacanciesChanged();
+      this.emitStatus();
+    }
   }
 
   async "profile.import"(): Promise<Profile | null> {
@@ -243,11 +282,13 @@ export class RadarService implements RadarApi {
       throw new Error("Unsupported file type. Choose the LinkedIn data export (.zip) or a profile PDF.");
     }
     if (!markdown.trim()) throw new Error("The file did not contain any profile text");
+    const before = this.d.store.getProfile();
     const p = this.d.store.saveProfile({
       markdown,
-      preferences: this.d.store.getProfile().preferences,
+      preferences: before.preferences,
       importedFrom,
     });
+    this.recomputeIfHomeChanged(before, p);
     this.emitStatus();
     if (p.markdown.trim()) this.rescoreSoon();
     return p;
@@ -299,6 +340,43 @@ export class RadarService implements RadarApi {
   "apiKey.clear"(): void {
     this.d.secrets.clear();
     this.emitStatus();
+  }
+
+  // ---------- travel ----------
+
+  "orsKey.status"(): { configured: boolean; masked: string | null } {
+    const k = this.d.orsSecrets?.get() ?? null;
+    return { configured: k !== null, masked: k ? maskKey(k) : null };
+  }
+
+  async "orsKey.set"(key: string): Promise<{ ok: boolean; error: string | null }> {
+    const secrets = this.d.orsSecrets;
+    const trimmed = key.trim();
+    if (!trimmed) return { ok: false, error: "Enter an API key" };
+    if (!secrets) return { ok: false, error: "OpenRouteService is not available" };
+    if (secrets.available && !secrets.available()) return { ok: false, error: SECURE_STORAGE_ERROR };
+    try {
+      await this.validateOrsKey(trimmed);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    try {
+      secrets.set(trimmed);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : SECURE_STORAGE_ERROR };
+    }
+    this.emitStatus();
+    void this.recomputeTravel().catch(() => undefined);
+    return { ok: true, error: null };
+  }
+
+  "orsKey.clear"(): void {
+    this.d.orsSecrets?.clear();
+    this.emitStatus();
+  }
+
+  "travel.recompute"(): Promise<{ updated: number; failed: number }> {
+    return this.recomputeTravel();
   }
 
   // ---------- misc ----------

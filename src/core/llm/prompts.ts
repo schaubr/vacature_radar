@@ -1,4 +1,5 @@
-import type { Feedback, OutputLanguage, Preferences, Profile, Recipe } from "../../shared/types";
+import { formatTravel } from "../../shared/travel";
+import type { Feedback, GeoState, OutputLanguage, Preferences, Profile, Recipe } from "../../shared/types";
 
 // ---------------------------------------------------------------------------
 // Scoring
@@ -23,7 +24,7 @@ Give four subscores, each an integer from 0 to 100:
 - diploma: does the candidate meet the formal education requirement? 100 = clearly meets or none required; 50 = equivalent through experience may apply; 0 = clearly does not meet a hard requirement.
 - experience: relevance and amount of the candidate's experience for this role, its domain and target group.
 - skills: overlap in competences, methods, target groups and tools.
-- preferences: location and commute, hours, contract type, ambitions, salary notes and deal-breakers stated in the candidate preferences.
+- preferences: location and commute, hours, contract type, ambitions, salary notes and deal-breakers stated in the candidate preferences. When a Travel line is present, use it for the commute part of the preferences subscore instead of estimating from place names. Compare it with the candidate's stated maximum commute. Public-transport travel is usually slower than the car time given.
 
 The overall score (0-100) is a holistic judgment, not an average. It must respect knock-outs: one unmet hard requirement can sink an otherwise attractive match.
 
@@ -101,9 +102,27 @@ export interface ScoringVacancyInput {
   description: string;
 }
 
+export interface ScoringTravel {
+  homeLabel: string;
+  travelMinutes: number | null;
+  travelKm: number | null;
+  geoState: GeoState;
+}
+
 export const MAX_DESCRIPTION_CHARS = 12_000;
 
-export function buildScoringUser(v: ScoringVacancyInput, feedback: FeedbackHint[]): string {
+export function travelLine(t: ScoringTravel | null | undefined): string | null {
+  if (!t || t.travelMinutes === null) return null;
+  const home = t.homeLabel ? ` (${t.homeLabel})` : "";
+  const approx = t.geoState === "approximate" ? " (only the region of the job is known)" : "";
+  return `Travel from the candidate's home${home}: ${formatTravel(t)} (car, without traffic; computed by a routing service)${approx}`;
+}
+
+export function buildScoringUser(
+  v: ScoringVacancyInput,
+  feedback: FeedbackHint[],
+  travel?: ScoringTravel | null,
+): string {
   const parts: string[] = [];
   const recent = feedback.slice(0, 10);
   if (recent.length) {
@@ -117,8 +136,9 @@ export function buildScoringUser(v: ScoringVacancyInput, feedback: FeedbackHint[
       `# Recent feedback from the candidate\nUse these only as light calibration of taste; do not let them override the actual requirements of this vacancy.\n${lines.join("\n")}`,
     );
   }
+  const tl = travelLine(travel);
   parts.push(
-    `# Vacancy\nTitle: ${v.title}\nOrganization: ${v.organization}\nLocation: ${v.location}\nSource: ${v.sourceName}\nURL: ${v.url}\n\n${v.description.slice(0, MAX_DESCRIPTION_CHARS)}`,
+    `# Vacancy\nTitle: ${v.title}\nOrganization: ${v.organization}\nLocation: ${v.location}\n${tl ? tl + "\n" : ""}Source: ${v.sourceName}\nURL: ${v.url}\n\n${v.description.slice(0, MAX_DESCRIPTION_CHARS)}`,
   );
   return parts.join("\n\n");
 }

@@ -7,7 +7,7 @@ import type { Notifier } from "../notify";
 import { BudgetExceededError, LlmNotConfiguredError, type LlmClient, type LlmUsage } from "../llm/client";
 import { llmExtractListing } from "../llm/extract-llm";
 import { learnRecipe } from "../llm/recipe-learn";
-import { scoreVacancy } from "../llm/score";
+import { scoreVacancy, type ScoringTravel } from "../llm/score";
 import { extractDetail } from "../extract/detail";
 import { cleanHtmlForLlm, looksJsRendered, sha256 } from "../extract/html";
 import { extractListing } from "../extract/listing";
@@ -28,6 +28,8 @@ export interface ScanDeps {
    * Extra optional dep: main passes a function that checks the secret store.
    */
   llmConfigured?: () => boolean;
+  /** Travel-time computation (optional; absent in contexts without routing). */
+  travel?: { computeFor(ids?: number[]): Promise<unknown> };
 }
 
 type Mode = "static" | "browser";
@@ -409,6 +411,7 @@ export class ScanService {
         budgeted++;
         await this.fetchDetail(row, mode);
       }
+      await this.computeTravel(fresh.map((r) => r.id));
 
       // 10. source runtime
       store.updateSourceRuntime(sourceId, {
@@ -433,6 +436,7 @@ export class ScanService {
     // 11-12. scoring queue + notifications (errors here must not turn the scan into a failure)
     let scored = 0;
     try {
+      await this.computeTravel();
       const scoredIds = await this.runScoringQueue(settings, sourceId);
       scored = scoredIds.length;
       this.notifyScored(scoredIds, settings);
@@ -441,8 +445,21 @@ export class ScanService {
       this.log("error", `Scoring failed: ${errMsg(e)}`, sourceId);
     }
 
+    // Scoring may have improved locations (geo_state reset to pending): resolve them for display.
+    await this.computeTravel();
+
     // 13.
     this.log("info", `Scan finished: ${found} found, ${newIds.length} new, ${scored} scored`, sourceId);
+  }
+
+  /** Geocodes + computes travel; never throws (ORS problems must not fail a scan). */
+  private async computeTravel(ids?: number[]): Promise<void> {
+    if (!this.deps.travel) return;
+    try {
+      await this.deps.travel.computeFor(ids);
+    } catch (e) {
+      this.log("warn", `Travel time computation failed: ${errMsg(e)}`);
+    }
   }
 
   private async fetchDetail(row: VacancyRow, mode: Mode): Promise<void> {
@@ -515,6 +532,16 @@ export class ScanService {
   ): Promise<LlmUsage> {
     const { store } = this.deps;
     const sourceName = store.getSource(row.sourceId)?.name ?? "";
+    const fresh = store.getVacancy(row.id) ?? row;
+    const travel: ScoringTravel | null =
+      fresh.travelMinutes !== null && profile.homeGeo
+        ? {
+            homeLabel: profile.homeGeo.label,
+            travelMinutes: fresh.travelMinutes,
+            travelKm: fresh.travelKm,
+            geoState: fresh.geoState,
+          }
+        : null;
     const r = await scoreVacancy(
       llm,
       settings,
@@ -528,6 +555,7 @@ export class ScanService {
         description: row.description,
       },
       feedback,
+      travel,
     );
     store.saveScore(row.id, { fields: r.fields, score: r.score, model: r.usage.model, profileVersion: profile.version });
     store.updateIdentity(row.id, { organization: r.organization, location: r.location });
@@ -544,6 +572,7 @@ export class ScanService {
     const run = (async () => {
       try {
         const settings = this.deps.store.getSettings();
+        await this.computeTravel();
         const ids = await this.runScoringQueue(settings, null, true);
         if (ids.length > 0) {
           this.log("info", `Scored ${ids.length} pending vacancies`);
@@ -615,6 +644,8 @@ export class ScanService {
       current = store.getVacancy(vacancyId)!;
       if (!current.description) throw new Error(current.scoreError ?? "Could not fetch the vacancy text");
     }
+    await this.computeTravel([vacancyId]);
+    current = store.getVacancy(vacancyId) ?? current;
     try {
       await this.scoreRow(llm, settings, profile, current, this.feedbackHints());
     } catch (e) {

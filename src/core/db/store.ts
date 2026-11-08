@@ -4,6 +4,7 @@ import {
   DEFAULT_SETTINGS,
   type Bucket,
   type Feedback,
+  type GeoState,
   type ListingItem,
   type LlmPurpose,
   type LogEntry,
@@ -57,6 +58,31 @@ export interface VacancyRow {
   feedback: Feedback | null;
   feedbackNote: string;
   notifiedAt: string | null;
+  geoQuery: string;
+  geoLabel: string;
+  geoLat: number | null;
+  geoLon: number | null;
+  geoState: GeoState;
+  geoError: string | null;
+  travelMinutes: number | null;
+  travelKm: number | null;
+  travelHomeKey: string | null;
+}
+
+export interface GeoCacheEntry {
+  query: string;
+  found: boolean;
+  lat: number | null;
+  lon: number | null;
+  label: string;
+  layer: string;
+  confidence: number | null;
+  at: string;
+}
+
+/** Normalized geocode cache key: lowercase, diacritics kept, whitespace collapsed. */
+export function normalizeGeoQuery(q: string): string {
+  return q.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 /** ListingItem + sourceId + dedupeKey + now (ISO timestamp used for first/last seen). */
@@ -127,6 +153,24 @@ const MIGRATIONS: string[] = [
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at TEXT NOT NULL, source_id INTEGER, level TEXT NOT NULL, message TEXT NOT NULL
   );
+  `,
+  `
+  ALTER TABLE vacancies ADD COLUMN geo_query TEXT NOT NULL DEFAULT '';
+  ALTER TABLE vacancies ADD COLUMN geo_label TEXT NOT NULL DEFAULT '';
+  ALTER TABLE vacancies ADD COLUMN geo_lat REAL;
+  ALTER TABLE vacancies ADD COLUMN geo_lon REAL;
+  ALTER TABLE vacancies ADD COLUMN geo_state TEXT NOT NULL DEFAULT 'pending';
+  ALTER TABLE vacancies ADD COLUMN geo_error TEXT;
+  ALTER TABLE vacancies ADD COLUMN travel_minutes REAL;
+  ALTER TABLE vacancies ADD COLUMN travel_km REAL;
+  ALTER TABLE vacancies ADD COLUMN travel_home_key TEXT;
+  ALTER TABLE profile ADD COLUMN home_query TEXT NOT NULL DEFAULT '';
+  ALTER TABLE profile ADD COLUMN home_label TEXT NOT NULL DEFAULT '';
+  ALTER TABLE profile ADD COLUMN home_lat REAL;
+  ALTER TABLE profile ADD COLUMN home_lon REAL;
+  ALTER TABLE profile ADD COLUMN home_error TEXT;
+  CREATE TABLE geo_cache(query TEXT PRIMARY KEY, found INTEGER NOT NULL, lat REAL, lon REAL,
+    label TEXT NOT NULL DEFAULT '', layer TEXT NOT NULL DEFAULT '', confidence REAL, at TEXT NOT NULL);
   `,
 ];
 
@@ -340,6 +384,15 @@ export class Store {
       feedback: (r.feedback as Feedback | null) ?? null,
       feedbackNote: str(r.feedback_note),
       notifiedAt: strOrNull(r.notified_at),
+      geoQuery: str(r.geo_query),
+      geoLabel: str(r.geo_label),
+      geoLat: numOrNull(r.geo_lat),
+      geoLon: numOrNull(r.geo_lon),
+      geoState: (r.geo_state as GeoState) ?? "pending",
+      geoError: strOrNull(r.geo_error),
+      travelMinutes: numOrNull(r.travel_minutes),
+      travelKm: numOrNull(r.travel_km),
+      travelHomeKey: strOrNull(r.travel_home_key),
     };
   }
 
@@ -456,9 +509,14 @@ export class Store {
   ): void {
     const sets = ["description = ?", "detail_fetched_at = ?"];
     const vals: unknown[] = [description, new Date().toISOString()];
-    // Only overwrite list-page values with non-empty detail values.
-    if (patch.organization) (sets.push("organization = ?"), vals.push(patch.organization));
-    if (patch.location) (sets.push("location = ?"), vals.push(patch.location));
+    // Organization/location: only fill when currently empty (the detail JSON-LD often has just the province
+    // and must not overwrite the town from the listing). Date text still takes non-empty detail values.
+    if (patch.organization) (sets.push("organization = CASE WHEN organization = '' THEN ? ELSE organization END"), vals.push(patch.organization));
+    if (patch.location) {
+      sets.push("geo_state = CASE WHEN location = '' THEN 'pending' ELSE geo_state END");
+      sets.push("location = CASE WHEN location = '' THEN ? ELSE location END");
+      vals.push(patch.location);
+    }
     if (patch.dateText) (sets.push("date_text = ?"), vals.push(patch.dateText));
     this.run(`UPDATE vacancies SET ${sets.join(", ")} WHERE id = ?`, ...vals, id);
   }
@@ -496,14 +554,20 @@ export class Store {
     );
   }
 
-  /** Overwrites organization/location only with non-empty values. Does not touch dedupe_key. */
+  /** Overwrites organization/location only with non-empty values (a changed location resets geo_state to pending). Does not touch dedupe_key. */
   updateIdentity(id: number, v: { organization?: string; location?: string }): void {
     const sets: string[] = [];
     const vals: unknown[] = [];
     const org = v.organization?.trim();
     const loc = v.location?.trim();
     if (org) (sets.push("organization = ?"), vals.push(org));
-    if (loc) (sets.push("location = ?"), vals.push(loc));
+    if (loc) {
+      // A changed location invalidates the geocode (evaluated against the old value, so first).
+      sets.push("geo_state = CASE WHEN location != ? THEN 'pending' ELSE geo_state END");
+      vals.push(loc);
+      sets.push("location = ?");
+      vals.push(loc);
+    }
     if (sets.length) this.run(`UPDATE vacancies SET ${sets.join(", ")} WHERE id = ?`, ...vals, id);
   }
 
@@ -537,12 +601,16 @@ export class Store {
       feedback: (r.feedback as Feedback | null) ?? null,
       scoreState: r.score_state as ScoreState,
       duplicateCount: Number(r.duplicate_count),
+      travelMinutes: numOrNull(r.travel_minutes),
+      travelKm: numOrNull(r.travel_km),
+      geoState: (r.geo_state as GeoState) ?? "pending",
     };
   }
 
   private static readonly LIST_SELECT = `
     SELECT v.id, v.source_id, v.title, v.organization, v.location, v.url, v.status, v.score, v.bucket,
            v.first_seen_at, v.fields_json, v.feedback, v.score_state, s.name AS source_name,
+           v.travel_minutes, v.travel_km, v.geo_state, v.geo_query, v.geo_label, v.geo_error,
            (SELECT COUNT(*) FROM vacancies d WHERE d.duplicate_of = v.id) AS duplicate_count
     FROM vacancies v JOIN sources s ON s.id = v.source_id`;
 
@@ -565,10 +633,16 @@ export class Store {
     } else if (!filter.includeUnscored) {
       where.push("v.score IS NOT NULL");
     }
+    if (filter.maxTravelMinutes != null) {
+      where.push("(v.travel_minutes IS NULL OR v.travel_minutes <= ?)");
+      params.push(filter.maxTravelMinutes);
+    }
     const order =
       filter.sort === "date"
         ? "v.first_seen_at DESC, v.id DESC"
-        : "(v.score IS NULL) ASC, v.score DESC, v.first_seen_at DESC, v.id DESC";
+        : filter.sort === "distance"
+          ? "(v.travel_minutes IS NULL) ASC, v.travel_minutes ASC, (v.score IS NULL) ASC, v.score DESC, v.id DESC"
+          : "(v.score IS NULL) ASC, v.score DESC, v.first_seen_at DESC, v.id DESC";
     let rows = this.all(`${Store.LIST_SELECT} WHERE ${where.join(" AND ")} ORDER BY ${order}`, ...params);
     const q = filter.search.trim().toLowerCase();
     if (q) {
@@ -602,6 +676,9 @@ export class Store {
       feedbackNote: row.feedbackNote,
       duplicates: dups,
       lastSeenAt: row.lastSeenAt,
+      geoQuery: str(r.geo_query),
+      geoLabel: str(r.geo_label),
+      geoError: strOrNull(r.geo_error),
     };
   }
 
@@ -670,7 +747,145 @@ export class Store {
       version: Number(r.version),
       importedFrom: (r.imported_from as Profile["importedFrom"]) ?? null,
       updatedAt: strOrNull(r.updated_at),
+      homeGeo:
+        r.home_lat != null && r.home_lon != null
+          ? { label: str(r.home_label), lat: Number(r.home_lat), lon: Number(r.home_lon) }
+          : null,
+      homeGeoError: str(r.home_error) || null,
     };
+  }
+
+  /** The normalized query the stored home coordinates/error belong to ("" when never resolved). */
+  getHomeQuery(): string {
+    this.getProfile();
+    return str(this.one("SELECT home_query FROM profile WHERE id = 1")!.home_query);
+  }
+
+  setHomeGeo(
+    r: { query: string; label: string; lat: number; lon: number } | { query: string; error: string },
+  ): void {
+    this.getProfile();
+    if ("error" in r) {
+      this.run(
+        "UPDATE profile SET home_query = ?, home_label = '', home_lat = NULL, home_lon = NULL, home_error = ? WHERE id = 1",
+        r.query,
+        r.error,
+      );
+    } else {
+      this.run(
+        "UPDATE profile SET home_query = ?, home_label = ?, home_lat = ?, home_lon = ?, home_error = NULL WHERE id = 1",
+        r.query,
+        r.label,
+        r.lat,
+        r.lon,
+      );
+    }
+  }
+
+  // ---------- geo / travel ----------
+
+  getGeoCache(query: string): GeoCacheEntry | null {
+    const r = this.one("SELECT * FROM geo_cache WHERE query = ?", normalizeGeoQuery(query));
+    if (!r) return null;
+    return {
+      query: str(r.query),
+      found: Number(r.found) === 1,
+      lat: numOrNull(r.lat),
+      lon: numOrNull(r.lon),
+      label: str(r.label),
+      layer: str(r.layer),
+      confidence: numOrNull(r.confidence),
+      at: str(r.at),
+    };
+  }
+
+  putGeoCache(e: Omit<GeoCacheEntry, "at"> & { at?: string }): void {
+    this.run(
+      `INSERT INTO geo_cache (query, found, lat, lon, label, layer, confidence, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(query) DO UPDATE SET found = excluded.found, lat = excluded.lat, lon = excluded.lon,
+         label = excluded.label, layer = excluded.layer, confidence = excluded.confidence, at = excluded.at`,
+      normalizeGeoQuery(e.query),
+      e.found ? 1 : 0,
+      e.lat,
+      e.lon,
+      e.label,
+      e.layer,
+      e.confidence,
+      e.at ?? new Date().toISOString(),
+    );
+  }
+
+  /** Stores a geocode outcome for a vacancy. Resets travel_home_key so travel is recomputed for the new place. */
+  saveVacancyGeo(
+    id: number,
+    g: { query: string; label: string; lat: number | null; lon: number | null; state: GeoState; error: string | null },
+  ): void {
+    const routable = g.state === "ok" || g.state === "approximate";
+    this.run(
+      `UPDATE vacancies SET geo_query = ?, geo_label = ?, geo_lat = ?, geo_lon = ?, geo_state = ?, geo_error = ?,
+         travel_home_key = NULL${routable ? "" : ", travel_minutes = NULL, travel_km = NULL"}
+       WHERE id = ?`,
+      g.query,
+      g.label,
+      g.lat,
+      g.lon,
+      g.state,
+      g.error,
+      id,
+    );
+  }
+
+  saveTravel(id: number, t: { minutes: number | null; km: number | null; homeKey: string }): void {
+    this.run(
+      "UPDATE vacancies SET travel_minutes = ?, travel_km = ?, travel_home_key = ? WHERE id = ?",
+      t.minutes,
+      t.km,
+      t.homeKey,
+      id,
+    );
+  }
+
+  /** Forget all computed travel (keeps geocodes); rows become eligible for vacanciesNeedingTravel again. */
+  clearTravel(): void {
+    this.run("UPDATE vacancies SET travel_minutes = NULL, travel_km = NULL, travel_home_key = NULL");
+  }
+
+  /** Sets geo_state for the given rows. */
+  setGeoState(ids: number[], state: GeoState): void {
+    for (const id of ids) this.run("UPDATE vacancies SET geo_state = ? WHERE id = ?", state, id);
+  }
+
+  /** Rows in any of the `from` states become 'pending' again. Returns the count. */
+  resetGeoState(from: GeoState[]): number {
+    if (!from.length) return 0;
+    return this.run(
+      `UPDATE vacancies SET geo_state = 'pending' WHERE geo_state IN (${from.map(() => "?").join(", ")})`,
+      ...from,
+    ).changes;
+  }
+
+  vacanciesNeedingGeo(limit: number, ids?: number[]): VacancyRow[] {
+    const idClause = ids ? `AND id IN (${ids.map(() => "?").join(", ") || "NULL"})` : "";
+    return this.all(
+      `SELECT * FROM vacancies
+       WHERE status != 'closed' AND duplicate_of IS NULL AND geo_state = 'pending' ${idClause}
+       ORDER BY id ASC LIMIT ?`,
+      ...(ids ?? []),
+      limit,
+    ).map((r) => this.mapVacancy(r));
+  }
+
+  vacanciesNeedingTravel(homeKey: string, limit: number, ids?: number[]): VacancyRow[] {
+    const idClause = ids ? `AND id IN (${ids.map(() => "?").join(", ") || "NULL"})` : "";
+    return this.all(
+      `SELECT * FROM vacancies
+       WHERE status != 'closed' AND duplicate_of IS NULL AND geo_lat IS NOT NULL AND geo_lon IS NOT NULL
+         AND geo_state IN ('ok', 'approximate') AND travel_home_key IS NOT ? ${idClause}
+       ORDER BY id ASC LIMIT ?`,
+      homeKey,
+      ...(ids ?? []),
+      limit,
+    ).map((r) => this.mapVacancy(r));
   }
 
   /** Increments version on every save. `importedFrom` defaults to "manual" when omitted. */

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Feedback, VacancyDetail } from "../../shared/types";
 import { call, errMsg } from "../api";
 import { Bar, Icon } from "../components/ui";
+import { formatTravel } from "../../shared/travel";
+import type { ViewId } from "../App";
 import { BUCKET_LABEL, relativeTime } from "../util";
 
 const SUB: { key: "diploma" | "experience" | "skills" | "preferences"; label: string }[] = [
@@ -13,11 +15,13 @@ const SUB: { key: "diploma" | "experience" | "skills" | "preferences"; label: st
 
 export function VacancyDetailPane({
   id,
+  go,
   tick,
   onChanged,
   onAct,
 }: {
   id: number;
+  go: (v: ViewId) => void;
   tick: number;
   onChanged: () => void;
   onAct: (id: number, st: "interested" | "applied" | "dismissed") => void;
@@ -103,6 +107,7 @@ export function VacancyDetailPane({
             <h2>{v.title}</h2>
           </div>
           <div className="d-org">{[v.organization, v.location].filter(Boolean).join(" · ") || "Unknown employer"}</div>
+          <TravelLine v={v} go={go} />
           <div className="d-links">
             <span className="subtle">{v.sourceName}</span>
             <span className="subtle">first seen {relativeTime(v.firstSeenAt)}</span>
@@ -278,6 +283,55 @@ export function VacancyDetailPane({
           {v.description ? <div className="prose">{v.description}</div> : <p className="subtle">{v.snippet || "No detail text was fetched."}</p>}
         </details>
       </article>
+    </div>
+  );
+}
+
+function TravelLine({ v, go }: { v: VacancyDetail; go: (v: ViewId) => void }) {
+  const [home, setHome] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    call("profile.get").then((p) => live && setHome(p.homeGeo ? p.homeGeo.label.split(",")[0].trim() : null)).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [v.id, v.geoState]);
+
+  const matched = v.geoLabel && (
+    <span className="d-matched">matched: {v.geoLabel}</span>
+  );
+  if (v.travelMinutes != null) {
+    return (
+      <div className="d-travel">
+        <Icon name="car" size={14} />
+        <span className="d-travel-text">
+          {formatTravel(v)}
+          {home ? ` from ${home}` : ""} (without traffic){v.geoState === "approximate" ? " (region only)" : ""}
+          {matched}
+        </span>
+      </div>
+    );
+  }
+  if (v.geoState === "unavailable") {
+    return (
+      <div className="d-travel subtle">
+        <Icon name="car" size={14} />
+        <span className="d-travel-text">
+          Add an OpenRouteService key (<button className="link" onClick={() => go("settings")}>Settings</button>) and your home location (
+          <button className="link" onClick={() => go("profile")}>Profile</button>) to see travel time.
+        </span>
+      </div>
+    );
+  }
+  let text: string;
+  if (v.geoState === "not_found") text = `Could not place “${v.geoQuery}”`;
+  else if (v.geoState === "error") text = `Travel time unavailable${v.geoError ? `: ${v.geoError}` : "."}`;
+  else if (v.geoState === "pending") text = "Travel time is being calculated…";
+  else text = "No travel time known.";
+  return (
+    <div className="d-travel subtle">
+      <Icon name="car" size={14} />
+      <span className="d-travel-text">{text}</span>
     </div>
   );
 }

@@ -23,6 +23,7 @@ const PATHS: Record<string, string> = {
   play: "M7 5l12 7-12 7V5z",
   chevron: "M9 6l6 6-6 6",
   close: "M6 6l12 12M18 6L6 18",
+  car: "M5 16v-4.5L7 7h10l2 4.5V16M5 16h14M5 16v2.5h3V16M16 16v2.5h3V16M7.5 12h9",
   key: "M14 10a4 4 0 11-3.5 6L4 22v-3H2v-2l7.5-7.5A4 4 0 0114 10z",
 };
 

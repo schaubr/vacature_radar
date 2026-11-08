@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Preferences, Profile } from "../../shared/types";
 import { DEFAULT_PREFERENCES } from "../../shared/types";
-import { call, errMsg } from "../api";
+import { call, errMsg, onRadar } from "../api";
 import { Icon, ViewHeader } from "../components/ui";
 import type { Shared } from "../App";
 import { relativeTime } from "../util";
@@ -39,6 +39,17 @@ export function ProfileView({ shared }: { shared: Shared }) {
 
   useEffect(() => {
     call("profile.get").then(apply);
+  }, []);
+
+  // The home location is resolved in the background after a save; refresh only the resolved state, never the form.
+  useEffect(() => {
+    const refresh = () => {
+      call("profile.get")
+        .then((q) => setProfile((cur) => (cur ? { ...cur, homeGeo: q.homeGeo, homeGeoError: q.homeGeoError, version: q.version, updatedAt: q.updatedAt } : cur)))
+        .catch(() => {});
+    };
+    const offs = [onRadar("app.status", refresh), onRadar("vacancies.changed", refresh)];
+    return () => offs.forEach((o) => o());
   }, []);
 
   const edit = <K extends keyof Preferences>(k: K, v: Preferences[K]) => {
@@ -84,6 +95,22 @@ export function ProfileView({ shared }: { shared: Shared }) {
       setImporting(false);
     }
   };
+
+  const hint = "A street address is more precise than a town.";
+  const homeNote = (() => {
+    const typed = prefs.homeLocation.trim();
+    if (!profile || typed === "" || typed !== profile.preferences.homeLocation.trim()) return <small className="subtle">{hint}</small>;
+    return (
+      <small className="geo-note">
+        {profile.homeGeo ? (
+          <span>Resolved: {profile.homeGeo.label}</span>
+        ) : (
+          <span className={profile.homeGeoError ? "err-text" : "subtle"}>{profile.homeGeoError ?? "Not resolved yet."}</span>
+        )}
+        <span className="subtle">{hint}</span>
+      </small>
+    );
+  })();
 
   return (
     <>
@@ -138,6 +165,8 @@ export function ProfileView({ shared }: { shared: Shared }) {
               <label className="field">
                 <span>Home location</span>
                 <input type="text" value={prefs.homeLocation} onChange={(e) => edit("homeLocation", e.target.value)} placeholder="Gent" />
+                {homeNote}
+                {homeNote}
               </label>
               <label className="field">
                 <span>Maximum commute</span>

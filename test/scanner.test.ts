@@ -7,6 +7,8 @@ import { BudgetExceededError, type LlmClient, type LlmUsage } from "../src/core/
 import { PoliteFetcher, type RawFetch } from "../src/core/net/fetcher";
 import type { PageRenderer } from "../src/core/net/render";
 import type { Notifier } from "../src/core/notify";
+import { OrsClient, type JsonHttp } from "../src/core/geo/ors";
+import { TravelService } from "../src/core/geo/travel";
 import { ScanService } from "../src/core/scan/scanner";
 import type { RadarEvents } from "../src/shared/ipc";
 import type { Recipe, SourceInput } from "../src/shared/types";
@@ -46,6 +48,7 @@ function scoreOut(score: number, organization = "", location = "") {
 class FakeLlm implements LlmClient {
   calls: Record<string, number> = {};
   titles: string[] = [];
+  users: string[] = [];
   scoreFor: (description: string, title: string) => number = () => 80;
   learned: Recipe | null = VVSG_RECIPE;
   failScoreFor: string | null = null;
@@ -59,6 +62,7 @@ class FakeLlm implements LlmClient {
       const text = String(req.user);
       const title = /Title: (.*)/.exec(text)?.[1] ?? "";
       this.titles.push(title);
+      this.users.push(text);
       if (this.failScoreFor && title.includes(this.failScoreFor)) throw new Error("boom");
       data = scoreOut(this.scoreFor(text, title), this.identity.organization, this.identity.location);
     } else {
@@ -85,7 +89,7 @@ interface Env {
   addSource(over?: Partial<SourceInput> & { recipe?: Recipe | null }): number;
 }
 
-function mk(opts: { llm?: boolean; profile?: boolean; renderer?: boolean } = {}): Env {
+function mk(opts: { llm?: boolean; profile?: boolean; renderer?: boolean; travel?: (store: Store) => { computeFor(ids?: number[]): Promise<unknown> } } = {}): Env {
   const store = new Store(":memory:");
   if (opts.profile !== false) store.saveProfile({ markdown: "I am a social worker.", preferences: store.getProfile().preferences });
   const routes = new Map<string, string>();
@@ -128,6 +132,7 @@ function mk(opts: { llm?: boolean; profile?: boolean; renderer?: boolean } = {})
     notifier,
     now: () => new Date(t),
     emit: <E extends keyof RadarEvents>(e: E) => void events.push(e),
+    travel: opts.travel?.(store),
   });
   routes.set(VVSG_URL, VVSG_HTML);
   return {
@@ -142,7 +147,7 @@ function mk(opts: { llm?: boolean; profile?: boolean; renderer?: boolean } = {})
   };
 }
 
-const rows = (e: Env) => e.store.listVacancies({ statuses: [], minScore: null, sourceId: null, search: "", includeUnscored: true, sort: "date" });
+const rows = (e: Env) => e.store.listVacancies({ statuses: [], minScore: null, sourceId: null, search: "", includeUnscored: true, maxTravelMinutes: null, sort: "date" });
 
 describe("ScanService", () => {
   it("inserts new items, fetches details and scores them", async () => {
@@ -263,7 +268,7 @@ describe("ScanService", () => {
     expect(keep).toBe(2);
     e.routes.set(VVSG_URL, partial);
     await e.scanner.scanSource(id);
-    let closed = e.store.listVacancies({ statuses: ["closed"], minScore: null, sourceId: null, search: "", includeUnscored: true, sort: "date" });
+    let closed = e.store.listVacancies({ statuses: ["closed"], minScore: null, sourceId: null, search: "", includeUnscored: true, maxTravelMinutes: null, sort: "date" });
     expect(closed).toHaveLength(0);
     // a failing/empty scan in between must not count as a miss
     e.routes.set(VVSG_URL, "<html><body><p>nothing</p></body></html>");
@@ -272,14 +277,14 @@ describe("ScanService", () => {
     // Misses reached the limit, but the rows were seen less than 7 days ago: nothing closes yet.
     e.routes.set(VVSG_URL, partial);
     await e.scanner.scanSource(id);
-    expect(e.store.listVacancies({ statuses: ["closed"], minScore: null, sourceId: null, search: "", includeUnscored: true, sort: "date" })).toHaveLength(0);
+    expect(e.store.listVacancies({ statuses: ["closed"], minScore: null, sourceId: null, search: "", includeUnscored: true, maxTravelMinutes: null, sort: "date" })).toHaveLength(0);
     // A user workflow state is never auto-closed.
     const missing = all.filter((v) => !applyRecipe(partial, VVSG_URL, VVSG_RECIPE).some((i) => i.url === v.url));
     e.store.setStatus(missing[0].id, "applied");
     e.setNow("2026-11-17T10:00:00Z");
     await e.scanner.scanSource(id);
     expect(e.store.getVacancy(missing[0].id)!.status).toBe("applied");
-    closed = e.store.listVacancies({ statuses: ["closed"], minScore: null, sourceId: null, search: "", includeUnscored: true, sort: "date" });
+    closed = e.store.listVacancies({ statuses: ["closed"], minScore: null, sourceId: null, search: "", includeUnscored: true, maxTravelMinutes: null, sort: "date" });
     expect(closed).toHaveLength(all.length - 2 - 1);
   });
 
@@ -622,5 +627,69 @@ describe("ScanService", () => {
       expect(r.ok).toBe(false);
       expect(r.error).toMatch(/No vacancies/);
     });
+  });
+});
+
+describe("ScanService travel integration", () => {
+  it("computes travel before scoring so the LLM sees the Travel line", async () => {
+    const order: string[] = [];
+    const http: JsonHttp = async (_u, init) => {
+      if (init.method === "GET") {
+        order.push("geocode");
+        return { status: 200, body: JSON.stringify({ features: [{ geometry: { coordinates: [3.7, 51.0] }, properties: { label: "Gent, Belgium", confidence: 0.9, layer: "locality" } }] }) };
+      }
+      order.push("matrix");
+      const n = JSON.parse(init.body!).destinations.length;
+      return { status: 200, body: JSON.stringify({ durations: [Array(n).fill(2040)], distances: [Array(n).fill(41.2)] }) };
+    };
+    const e = mk({
+      travel: (store) => new TravelService({ store, ors: new OrsClient({ http, getKey: () => "K", minIntervalMs: 0 }), orsConfigured: () => true }),
+    });
+    e.store.saveProfile({ markdown: "I am a social worker.", preferences: { ...e.store.getProfile().preferences, homeLocation: "Gent" } });
+    const origStructured = e.llm.structured.bind(e.llm);
+    e.llm.structured = (async (req: any) => {
+      if (req.purpose === "score") order.push("score");
+      return origStructured(req);
+    }) as typeof e.llm.structured;
+    const id = e.addSource();
+    await e.scanner.scanSource(id);
+    expect(e.llm.users.length).toBeGreaterThan(0);
+    expect(e.llm.users.some((u) => /Travel from the candidate's home \(Gent, Belgium\): 34 min by car, 41\.2 km \(car, without traffic/.test(u))).toBe(true);
+    expect(order.indexOf("matrix")).toBeGreaterThan(-1);
+    expect(order.indexOf("matrix")).toBeLessThan(order.indexOf("score"));
+    // rows whose place cannot be derived (private organizations without a location) get no travel and no line
+    const withTravel = rows(e).filter((v) => v.travelMinutes !== null);
+    expect(withTravel.length).toBeGreaterThan(0);
+    expect(withTravel[0]).toMatchObject({ travelMinutes: 34, travelKm: 41.2, geoState: "ok" });
+    expect(e.llm.users.filter((u) => u.includes("Travel from")).length).toBe(withTravel.length);
+  });
+
+  it("scores normally without a travel line when travel is not configured", async () => {
+    const e = mk();
+    await e.scanner.scanSource(e.addSource());
+    expect(e.llm.users.length).toBeGreaterThan(0);
+    expect(e.llm.users.some((u) => u.includes("Travel from"))).toBe(false);
+  });
+
+  it("a failing travel service never fails the scan", async () => {
+    const e = mk({ travel: () => ({ computeFor: async () => { throw new Error("ors down"); } }) });
+    await e.scanner.scanSource(e.addSource());
+    expect(e.store.getSource(1)!.lastStatus).toBe("ok");
+    expect(rows(e).every((v) => v.scoreState === "scored")).toBe(true);
+    expect(e.store.listLog(50).some((l) => /Travel time computation failed: ors down/.test(l.message))).toBe(true);
+  });
+
+  it("scorePending and scoreOne compute travel first", async () => {
+    const calls: (number[] | undefined)[] = [];
+    const e = mk({ travel: () => ({ computeFor: async (ids) => void calls.push(ids) }) });
+    const id = e.addSource();
+    await e.scanner.scanSource(id);
+    calls.length = 0;
+    await e.scanner.scorePending();
+    expect(calls).toEqual([undefined]);
+    calls.length = 0;
+    const v = rows(e)[0];
+    await e.scanner.scoreOne(v.id);
+    expect(calls).toEqual([[v.id]]);
   });
 });

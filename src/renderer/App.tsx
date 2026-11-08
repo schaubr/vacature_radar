@@ -27,6 +27,7 @@ const EMPTY_STATUS: AppStatus = {
   apiKeyConfigured: true,
   budgetExceeded: false,
   profileReady: true,
+  travelConfigured: true,
 };
 
 export interface Shared {

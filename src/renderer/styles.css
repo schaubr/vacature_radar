@@ -182,7 +182,7 @@ input[type="range"] { accent-color: var(--accent); width: 80px; margin: 0; }
 
 .search { position: relative; display: flex; align-items: center; color: var(--fg-3); }
 .search .icon { position: absolute; left: 8px; pointer-events: none; }
-.search input { width: 230px; padding-left: 28px; }
+.search input { width: 210px; padding-left: 28px; }
 
 .spinner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--sep-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -233,7 +233,8 @@ input[type="range"] { accent-color: var(--accent); width: 80px; margin: 0; }
 .inline-field { display: inline-flex; align-items: center; gap: 8px; color: var(--fg-2); }
 .inline-field output { width: 22px; font-variant-numeric: tabular-nums; color: var(--fg); }
 .filters select { height: 24px; max-width: 150px; }
-.filters { gap: 8px 14px; }
+.filters { gap: 8px 12px; }
+.view-header .drive-select { height: 24px; width: 152px; }
 
 .split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(340px, 45fr) minmax(0, 55fr); }
 .list-pane { display: flex; flex-direction: column; min-height: 0; border-right: 0.5px solid var(--sep); }
@@ -388,3 +389,15 @@ kbd:first-child { margin-left: 0; }
   .search input { width: 160px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ---------- travel time ---------- */
+.row-sub { display: flex; align-items: center; gap: 8px; }
+.row-sub-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.travel { flex: none; display: inline-flex; align-items: center; gap: 3px; color: var(--fg-3); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.d-travel { display: flex; align-items: flex-start; gap: 6px; font-size: 13px; margin-top: 2px; }
+.d-travel > .icon { flex: none; margin-top: 2px; color: var(--fg-3); }
+.d-travel-text { min-width: 0; }
+.d-matched { display: block; color: var(--fg-3); font-size: 12px; }
+.geo-note { font-size: 12px; display: flex; flex-direction: column; gap: 1px; }
+.err-text { color: var(--red); }
+.recompute { display: inline-flex; align-items: center; gap: 10px; }

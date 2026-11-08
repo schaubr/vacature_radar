@@ -2,6 +2,8 @@
  *   tsx scripts/scan-cli.ts test <url> [--browser] [--recipe '<json>']
  *   tsx scripts/scan-cli.ts detail <url> [--browser]
  *   tsx scripts/scan-cli.ts scan --db ./dev.db [--source <id>]
+ *   ORS_API_KEY=... tsx scripts/scan-cli.ts geo <text>
+ *   ORS_API_KEY=... tsx scripts/scan-cli.ts travel <from> <to>
  */
 import { execSync } from "node:child_process";
 import path from "node:path";
@@ -14,6 +16,8 @@ import { cleanHtmlForLlm, looksJsRendered } from "../src/core/extract/html";
 import { AnthropicLlmClient, type LlmClient } from "../src/core/llm/client";
 import { llmExtractListing } from "../src/core/llm/extract-llm";
 import { learnRecipe } from "../src/core/llm/recipe-learn";
+import { OrsClient, type JsonHttp } from "../src/core/geo/ors";
+import { classifyHit, locationQuery } from "../src/core/geo/locate";
 import { PoliteFetcher, type RawFetch } from "../src/core/net/fetcher";
 import type { PageRenderer } from "../src/core/net/render";
 import type { Notifier } from "../src/core/notify";
@@ -64,6 +68,17 @@ function makeLlm(store: Store | null): LlmClient | null {
       store?.recordUsage({ ...u, at: new Date().toISOString() }),
     anthropicFactory: (apiKey) => new Anthropic({ apiKey }),
   });
+}
+
+const orsHttp: JsonHttp = async (url, init) => {
+  const res = await fetch(url, { method: init.method, headers: init.headers, body: init.body, signal: init.signal });
+  return { status: res.status, body: await res.text() };
+};
+
+function makeOrs(): OrsClient {
+  const key = process.env.ORS_API_KEY;
+  if (!key) throw new Error("Set ORS_API_KEY (free key from openrouteservice.org)");
+  return new OrsClient({ http: orsHttp, getKey: () => key });
 }
 
 function flag(args: string[], name: string): string | undefined {
@@ -149,8 +164,25 @@ async function main(): Promise<void> {
       console.log("counts:", JSON.stringify(store.countVacancies(70)));
       for (const l of store.listLog(20).reverse()) console.log(`  [${l.level}] ${l.message}`);
       store.close();
+    } else if (cmd === "geo") {
+      const text = rest.filter((a) => !a.startsWith("--")).join(" ");
+      if (!text) throw new Error("usage: geo <text>");
+      const hit = await makeOrs().geocode(text);
+      const q = locationQuery({ location: text, organization: "" });
+      console.log(hit ? JSON.stringify(hit) : "not found");
+      if (hit) console.log(`classified: ${classifyHit(hit, false)}  (query used by the app: ${q?.query ?? "-"})`);
+    } else if (cmd === "travel") {
+      const [from, to] = rest.filter((a) => !a.startsWith("--"));
+      if (!from || !to) throw new Error('usage: travel "<from>" "<to>"');
+      const ors = makeOrs();
+      const a = await ors.geocode(from);
+      const b = await ors.geocode(to);
+      if (!a || !b) throw new Error(`could not place ${!a ? from : to}`);
+      console.log(`from: ${a.label}\nto:   ${b.label}`);
+      const [r] = await ors.matrix(a, [b]);
+      console.log(r ? `${r.minutes} min by car, ${r.km} km` : "no route");
     } else {
-      console.log("usage:\n  test <url> [--browser] [--recipe '<json>']\n  detail <url> [--browser]\n  scan --db <path> [--source <id>]");
+      console.log("usage:\n  test <url> [--browser] [--recipe '<json>']\n  detail <url> [--browser]\n  scan --db <path> [--source <id>]\n  geo <text>        (env ORS_API_KEY)\n  travel <from> <to> (env ORS_API_KEY)");
       process.exitCode = 2;
     }
   } finally {

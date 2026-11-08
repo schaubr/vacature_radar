@@ -3,13 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SecretsPort } from "../core/service";
 
-/** API key stored encrypted with the OS keychain (safeStorage), base64 in userData/secret.bin (mode 0600). */
+/** A key stored encrypted with the OS keychain (safeStorage), base64 in userData/<filename> (mode 0600). */
 export class SafeStorageSecrets implements SecretsPort {
   private cache: string | null | undefined;
   private readonly file: string;
 
-  constructor(userDataDir: string) {
-    this.file = path.join(userDataDir, "secret.bin");
+  constructor(userDataDir: string, filename = "secret.bin") {
+    this.file = path.join(userDataDir, filename);
   }
 
   available(): boolean {

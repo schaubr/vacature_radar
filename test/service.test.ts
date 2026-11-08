@@ -15,7 +15,7 @@ const srcInput = (over: Partial<SourceInput> = {}): SourceInput => ({
   name: "VVSG", url: VVSG_URL, enabled: true, renderMode: "static", scanIntervalHours: null, maxPages: 1, notes: "", ...over,
 });
 
-function setup(opts: { key?: string | null; secureStorage?: boolean; file?: { path: string; data: Uint8Array } | null; llm?: LlmClient | null } = {}) {
+function setup(opts: { key?: string | null; secureStorage?: boolean; file?: { path: string; data: Uint8Array } | null; llm?: LlmClient | null; orsKey?: string | null } = {}) {
   const store = new Store(":memory:");
   let key: string | null = opts.key === undefined ? null : opts.key;
   const secrets: SecretsPort = {
@@ -24,6 +24,15 @@ function setup(opts: { key?: string | null; secureStorage?: boolean; file?: { pa
     clear: () => { key = null; },
     available: () => opts.secureStorage !== false,
   };
+  let orsKey: string | null = opts.orsKey ?? null;
+  const orsSecrets: SecretsPort = {
+    get: () => orsKey,
+    set: (k) => { orsKey = k; },
+    clear: () => { orsKey = null; },
+    available: () => opts.secureStorage !== false,
+  };
+  const recomputeAll = vi.fn(async () => ({ updated: 2, failed: 1 }));
+  const validateOrsKey = vi.fn(async (k: string) => { if (k === "bad") throw new Error("Invalid OpenRouteService API key"); });
   const events: { name: string; payload: unknown }[] = [];
   const emit = <E extends keyof RadarEvents>(name: E, payload: RadarEvents[E]) => void events.push({ name, payload });
   const raw = async (url: string) => {
@@ -39,11 +48,11 @@ function setup(opts: { key?: string | null; secureStorage?: boolean; file?: { pa
   const onSettingsChanged = vi.fn();
   const validateKey = vi.fn(async (k: string) => { if (k === "bad") throw new Error("Invalid API key"); });
   const service = new RadarService({
-    store, scanner, scheduler, llm, secrets, now, emit, onSettingsChanged, validateKey,
+    store, scanner, scheduler, llm, secrets, now, emit, onSettingsChanged, validateKey, orsSecrets, validateOrsKey, travel: { recomputeAll },
     shell: { openExternal: (u) => opened.push(u), pickImportFile: async () => opts.file ?? null },
   });
   const names = () => events.map((e) => e.name);
-  return { store, service, events, names, opened, onSettingsChanged, validateKey, getKey: () => key };
+  return { store, service, events, names, opened, onSettingsChanged, validateKey, getKey: () => key, getOrsKey: () => orsKey, recomputeAll, validateOrsKey };
 }
 
 describe("RadarService", () => {
@@ -84,9 +93,9 @@ describe("RadarService", () => {
     store.updateSourceRuntime(s2.id, { recipe: VVSG_RECIPE });
     await service["scan.now"](s2.id);
     await vi.waitFor(() => expect(store.getSource(s2.id)!.lastStatus).toBe("ok"));
-    expect(service["vacancies.list"]({ statuses: [], minScore: null, sourceId: null, search: "", includeUnscored: true, sort: "date" }).length).toBeGreaterThan(0);
+    expect(service["vacancies.list"]({ statuses: [], minScore: null, sourceId: null, search: "", includeUnscored: true, maxTravelMinutes: null, sort: "date" }).length).toBeGreaterThan(0);
     service["sources.delete"](s2.id);
-    expect(service["vacancies.list"]({ statuses: [], minScore: null, sourceId: s2.id, search: "", includeUnscored: true, sort: "date" })).toHaveLength(0);
+    expect(service["vacancies.list"]({ statuses: [], minScore: null, sourceId: s2.id, search: "", includeUnscored: true, maxTravelMinutes: null, sort: "date" })).toHaveLength(0);
     expect(store.getVacancyByUrl("https://www.vvsg.be/vacatures/overzicht-vacatures/lennik-expert-financien")).toBeNull();
   });
 
@@ -115,7 +124,7 @@ describe("RadarService", () => {
     store.updateSourceRuntime(s.id, { recipe: VVSG_RECIPE });
     await service["scan.now"](s.id);
     await vi.waitFor(() => expect(store.getSource(s.id)!.lastStatus).toBe("ok"));
-    const list = service["vacancies.list"]({ statuses: [], minScore: null, sourceId: null, search: "", includeUnscored: true, sort: "date" });
+    const list = service["vacancies.list"]({ statuses: [], minScore: null, sourceId: null, search: "", includeUnscored: true, maxTravelMinutes: null, sort: "date" });
     expect(service["vacancies.counts"]().new).toBe(list.length);
     const d = service["vacancies.get"](list[0].id)!;
     expect(d.status).toBe("seen");
@@ -242,5 +251,61 @@ describe("RadarService", () => {
     await vi.waitFor(() => expect((events.filter((e) => e.name === "app.status").at(-1)!.payload as { scanning: boolean }).scanning).toBe(false));
     const statuses = events.filter((e) => e.name === "app.status").map((e) => e.payload as { scanning: boolean; currentSourceId: number | null });
     expect(statuses.some((x) => x.scanning && x.currentSourceId === s.id)).toBe(true);
+  });
+
+  describe("travel", () => {
+    it("orsKey.status/set/clear mirror the Anthropic key handling, validate first and recompute after saving", async () => {
+      const { service, getOrsKey, validateOrsKey, recomputeAll, events } = setup();
+      expect(service["orsKey.status"]()).toEqual({ configured: false, masked: null });
+      expect(await service["orsKey.set"]("   ")).toEqual({ ok: false, error: "Enter an API key" });
+      expect(await service["orsKey.set"]("bad")).toEqual({ ok: false, error: "Invalid OpenRouteService API key" });
+      expect(getOrsKey()).toBeNull();
+      expect(recomputeAll).not.toHaveBeenCalled();
+      expect(await service["orsKey.set"](" 5b3ce3597851110001cf6248abcdef1234567890 ")).toEqual({ ok: true, error: null });
+      expect(validateOrsKey).toHaveBeenLastCalledWith("5b3ce3597851110001cf6248abcdef1234567890");
+      expect(getOrsKey()).toBe("5b3ce3597851110001cf6248abcdef1234567890");
+      expect(service["orsKey.status"]()).toMatchObject({ configured: true, masked: expect.stringContaining("…") });
+      expect(service["orsKey.status"]().masked).not.toContain("abcdef12345678");
+      await vi.waitFor(() => expect(recomputeAll).toHaveBeenCalledTimes(1));
+      expect(events.some((e) => e.name === "vacancies.changed")).toBe(true);
+      service["orsKey.clear"]();
+      expect(service["orsKey.status"]().configured).toBe(false);
+    });
+
+    it("orsKey.set reports unavailable secure storage", async () => {
+      const { service } = setup({ secureStorage: false });
+      expect((await service["orsKey.set"]("abc")).error).toMatch(/Secure storage/);
+    });
+
+    it("travel.recompute awaits the recompute and returns its counts", async () => {
+      const { service, recomputeAll } = setup();
+      expect(await service["travel.recompute"]()).toEqual({ updated: 2, failed: 1 });
+      expect(recomputeAll).toHaveBeenCalledTimes(1);
+    });
+
+    it("profile.save recomputes only when the home location changed", async () => {
+      const { service, recomputeAll } = setup();
+      const prefs = { ...DEFAULT_PREFERENCES, homeLocation: "Gent" };
+      service["profile.save"]({ markdown: "", preferences: prefs });
+      await vi.waitFor(() => expect(recomputeAll).toHaveBeenCalledTimes(1));
+      service["profile.save"]({ markdown: "more", preferences: { ...prefs, maxCommute: "40 km" } });
+      service["profile.save"]({ markdown: "more", preferences: { ...prefs, homeLocation: " Gent " } });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(recomputeAll).toHaveBeenCalledTimes(1);
+      service["profile.save"]({ markdown: "more", preferences: { ...prefs, homeLocation: "Aalst" } });
+      await vi.waitFor(() => expect(recomputeAll).toHaveBeenCalledTimes(2));
+    });
+
+    it("app.status.travelConfigured needs the ORS key and a resolved home", () => {
+      const a = setup({ orsKey: "k" });
+      expect(a.service["app.status"]().travelConfigured).toBe(false);
+      a.store.setHomeGeo({ query: "gent", label: "Gent", lat: 51, lon: 3 });
+      expect(a.service["app.status"]().travelConfigured).toBe(true);
+      a.service["orsKey.clear"]();
+      expect(a.service["app.status"]().travelConfigured).toBe(false);
+      const b = setup();
+      b.store.setHomeGeo({ query: "gent", label: "Gent", lat: 51, lon: 3 });
+      expect(b.service["app.status"]().travelConfigured).toBe(false);
+    });
   });
 });

@@ -7,6 +7,7 @@ export type Feedback = "up" | "down";
 export type ModelId = "claude-opus-5-5" | "claude-sonnet-5-5" | "claude-haiku-5-5";
 export type Effort = "low" | "medium" | "high";
 export type OutputLanguage = "en" | "nl";
+export type GeoState = "pending" | "ok" | "approximate" | "not_found" | "error" | "unavailable";
 export type LlmPurpose = "score" | "learn_recipe" | "extract_listing" | "profile_import";
 
 export interface Recipe {
@@ -100,6 +101,9 @@ export interface VacancyListItem {
   feedback: Feedback | null;
   scoreState: "scored" | "pending" | "filtered" | "error" | "skipped";
   duplicateCount: number; // how many other vacancies point to this one as duplicate_of
+  travelMinutes: number | null; // driving time from home, free-flow
+  travelKm: number | null;
+  geoState: GeoState;
 }
 
 export interface VacancyDetail extends VacancyListItem {
@@ -114,6 +118,9 @@ export interface VacancyDetail extends VacancyListItem {
   feedbackNote: string;
   duplicates: { id: number; url: string; sourceName: string }[];
   lastSeenAt: string;
+  geoQuery: string;
+  geoLabel: string;
+  geoError: string | null;
 }
 
 export interface VacancyFilter {
@@ -122,7 +129,8 @@ export interface VacancyFilter {
   sourceId: number | null;
   search: string; // matches title/organization/location, case-insensitive
   includeUnscored: boolean;
-  sort: "score" | "date";
+  maxTravelMinutes: number | null; // rows with KNOWN travel above this are hidden; unknown travel stays visible
+  sort: "score" | "date" | "distance"; // distance: ascending travelMinutes, unknown last
 }
 
 export interface VacancyCounts {
@@ -153,6 +161,8 @@ export interface Profile {
   version: number; // increments on every save
   importedFrom: "linkedin_zip" | "linkedin_pdf" | "manual" | null;
   updatedAt: string | null;
+  homeGeo: { label: string; lat: number; lon: number } | null;
+  homeGeoError: string | null;
 }
 
 export interface Settings {
@@ -204,6 +214,7 @@ export interface AppStatus {
   apiKeyConfigured: boolean;
   budgetExceeded: boolean;
   profileReady: boolean; // profile markdown non-empty
+  travelConfigured: boolean; // ORS key stored AND homeGeo resolved
 }
 
 export const DEFAULT_SETTINGS: Settings = {

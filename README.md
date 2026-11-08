@@ -29,7 +29,8 @@ Closing the window keeps the app running in the menu bar (the ◎ icon). Scans r
    - Profile PDF: your profile > More > Save to PDF (Claude converts it to text, a few cents).
 
    Then fill in the preferences (home location, commute, hours, contract types, deal-breakers). Use exclude keywords such as `technisch, boekhouder, ICT` to skip irrelevant local-government jobs before any tokens are spent.
-3. **Sources:** the default sources work without a key. Use Test on any source you add. You can add your own listing URLs, for example a VDAB search with your own filters.
+3. **Travel time (optional):** create a free account at openrouteservice.org, copy the API key from the dashboard into Settings > Travel time, and put your home location in Profile (a street address is more precise than a town). Each vacancy then shows the driving time from home, without traffic, and Claude uses that number when it judges the commute. The Inbox can sort by distance and filter on a maximum drive time. The detail pane shows which place was matched, so a wrong match is easy to spot.
+4. **Sources:** the default sources work without a key. Use Test on any source you add. You can add your own listing URLs, for example a VDAB search with your own filters.
 
 ## How it works
 
@@ -52,8 +53,8 @@ Roughly $0.02 per scored vacancy with Opus 5.5 at low effort. Learning a page la
 ## Where data lives
 
 - Database: `~/Library/Application Support/Vacature Radar/radar.db`
-- API key: encrypted with Electron safeStorage (macOS Keychain).
-- Nothing leaves the Mac except page fetches from the job sites and calls to the Claude API.
+- API keys (Anthropic and OpenRouteService): encrypted with Electron safeStorage (macOS Keychain).
+- Nothing leaves the Mac except page fetches from the job sites, calls to the Claude API, and place names plus coordinates sent to OpenRouteService for travel times. Geocoding results are cached, so each place is looked up once.
 
 ## Troubleshooting
 
@@ -62,6 +63,7 @@ Roughly $0.02 per scored vacancy with Opus 5.5 at low effort. Learning a page la
 - A recipe that stops working is relearned automatically (this needs the key and costs a few cents).
 - "Blocked by robots.txt": the site forbids automated access to that URL and the app will not fetch it.
 - Vacancies stay "pending" without a key, a profile, or budget. They are scored as soon as that is fixed.
+- Travel time missing: "unavailable" means no OpenRouteService key or home location; "could not place" means the vacancy names no recognizable town. Settings > Recompute all travel times retries everything. If the free quota is hit, travel times resume on the next scan.
 
 ## Politeness
 

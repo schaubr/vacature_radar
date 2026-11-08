@@ -40,6 +40,10 @@ export interface RadarApi {
   "apiKey.status"(): { configured: boolean; masked: string | null };
   "apiKey.set"(key: string): Promise<{ ok: boolean; error: string | null }>; // validates with a tiny models.list call
   "apiKey.clear"(): void;
+  "orsKey.status"(): { configured: boolean; masked: string | null };
+  "orsKey.set"(key: string): Promise<{ ok: boolean; error: string | null }>; // validates by geocoding "Gent"
+  "orsKey.clear"(): void;
+  "travel.recompute"(): Promise<{ updated: number; failed: number }>;
   "usage.summary"(): UsageSummary;
   "log.list"(limit: number): LogEntry[];
   "app.status"(): AppStatus;
@@ -85,6 +89,10 @@ const METHOD_KEYS: Record<keyof RadarApi, true> = {
   "apiKey.status": true,
   "apiKey.set": true,
   "apiKey.clear": true,
+  "orsKey.status": true,
+  "orsKey.set": true,
+  "orsKey.clear": true,
+  "travel.recompute": true,
   "usage.summary": true,
   "log.list": true,
   "app.status": true,

@@ -71,6 +71,7 @@ const filter = (over: Partial<VacancyFilter> = {}): VacancyFilter => ({
   sourceId: null,
   search: "",
   includeUnscored: true,
+  maxTravelMinutes: null,
   sort: "score",
   ...over,
 });
@@ -105,7 +106,7 @@ describe("RADAR_METHODS", () => {
     expect(new Set(RADAR_METHODS).size).toBe(RADAR_METHODS.length);
     expect(RADAR_METHODS).toContain("sources.list");
     expect(RADAR_METHODS).toContain("app.status");
-    expect(RADAR_METHODS).toHaveLength(25);
+    expect(RADAR_METHODS).toHaveLength(29);
   });
 });
 
@@ -298,12 +299,15 @@ describe("vacancies", () => {
     expect(store.findDuplicateCandidate("old", old.id + 100, new Date("2026-09-15T00:00:00.000Z"))?.id).toBe(old.id);
   });
 
-  it("saveDetail stores text and overrides only non-empty fields", () => {
+  it("saveDetail fills organization/location only when empty (listing values win)", () => {
     const v = store.insertVacancy(nv(sid, { organization: "List Org", location: "Gent", dateText: "1 nov" }));
-    store.saveDetail(v.id, "full text", { organization: "", location: "Brugge" });
+    store.saveDetail(v.id, "full text", { organization: "", location: "Oost-Vlaanderen", dateText: "2 nov" });
     const r = store.getVacancy(v.id)!;
-    expect(r).toMatchObject({ description: "full text", organization: "List Org", location: "Brugge", dateText: "1 nov" });
+    expect(r).toMatchObject({ description: "full text", organization: "List Org", location: "Gent", dateText: "2 nov" });
     expect(r.detailFetchedAt).toBeTruthy();
+    const e = store.insertVacancy(nv(sid, { organization: "", location: "" }));
+    store.saveDetail(e.id, "t", { organization: "Detail Org", location: "Brugge" });
+    expect(store.getVacancy(e.id)).toMatchObject({ organization: "Detail Org", location: "Brugge" });
   });
 
   it("saveScore sets state, bucket, json and clears errors; setScoreState transitions", () => {
@@ -499,7 +503,15 @@ describe("profile and settings", () => {
 
   it("auto-creates the profile with defaults and version 0", () => {
     const p = store.getProfile();
-    expect(p).toEqual({ markdown: "", preferences: DEFAULT_PREFERENCES, version: 0, importedFrom: null, updatedAt: null });
+    expect(p).toEqual({
+      markdown: "",
+      preferences: DEFAULT_PREFERENCES,
+      version: 0,
+      importedFrom: null,
+      updatedAt: null,
+      homeGeo: null,
+      homeGeoError: null,
+    });
     expect(store.getProfile().version).toBe(0);
   });
 
@@ -609,5 +621,116 @@ describe("log", () => {
     expect(l[0].message).toBe("m2250");
     expect(l.some((x) => x.message === "m1")).toBe(false);
     expect(l.some((x) => x.message === "m251")).toBe(true);
+  });
+});
+
+describe("travel storage (user_version 2)", () => {
+  let store: Store;
+  let sid: number;
+  beforeEach(() => {
+    store = new Store(":memory:");
+    sid = store.createSource(srcInput()).id;
+  });
+
+  it("upgrades an existing v1 database file in place, keeping data", async () => {
+    const { DatabaseSync } = await import("node:sqlite");
+    const { readFileSync } = await import("node:fs");
+    const dir = mkdtempSync(path.join(tmpdir(), "radar-mig-"));
+    const file = path.join(dir, "radar.db");
+    try {
+      // Build a v1 database with the original schema (migration 1 text) and some data.
+      const src = readFileSync(path.join(__dirname, "../src/core/db/store.ts"), "utf8");
+      const m = /const MIGRATIONS: string\[\] = \[\s*`([\s\S]*?)`,\s*`/.exec(src);
+      expect(m).toBeTruthy();
+      const db = new DatabaseSync(file);
+      db.exec(m![1]);
+      db.exec("PRAGMA user_version = 1");
+      db.exec(`INSERT INTO sources (name, url, created_at) VALUES ('Old', 'https://x.test', '${T0}')`);
+      db.exec(`INSERT INTO vacancies (source_id, url, title, organization, location, first_seen_at, last_seen_at, dedupe_key, score)
+               VALUES (1, 'https://x.test/1', 'Old job', 'Org', 'Gent', '${T0}', '${T0}', 'k', 77)`);
+      db.exec(`INSERT INTO profile (id, markdown, preferences_json, version) VALUES (1, 'md', '{"homeLocation":"Gent"}', 3)`);
+      db.close();
+
+      const s = new Store(file);
+      const cols = (t: string) => (s as unknown as { db: import("node:sqlite").DatabaseSync }).db
+        .prepare(`PRAGMA table_info(${t})`).all().map((r) => (r as { name: string }).name);
+      expect(cols("vacancies")).toEqual(expect.arrayContaining(["geo_query", "geo_label", "geo_lat", "geo_lon", "geo_state", "geo_error", "travel_minutes", "travel_km", "travel_home_key"]));
+      expect(cols("profile")).toEqual(expect.arrayContaining(["home_query", "home_label", "home_lat", "home_lon", "home_error"]));
+      expect(cols("geo_cache")).toContain("confidence");
+      const [v] = s.listVacancies(filter());
+      expect(v).toMatchObject({ title: "Old job", score: 77, geoState: "pending", travelMinutes: null });
+      const p = s.getProfile();
+      expect(p).toMatchObject({ markdown: "md", version: 3, homeGeo: null, homeGeoError: null });
+      expect(p.preferences.homeLocation).toBe("Gent");
+      s.close();
+      // reopening a v2 file does not migrate again
+      new Store(file).close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("geo cache round-trips with normalized keys", () => {
+    store.putGeoCache({ query: "  Gent  ", found: true, lat: 51.05, lon: 3.72, label: "Gent, BE", layer: "locality", confidence: 0.9 });
+    expect(store.getGeoCache("gent")).toMatchObject({ query: "gent", found: true, lat: 51.05, label: "Gent, BE" });
+    store.putGeoCache({ query: "Gent", found: false, lat: null, lon: null, label: "", layer: "", confidence: null });
+    expect(store.getGeoCache("GENT")?.found).toBe(false);
+    expect(store.getGeoCache("nowhere")).toBeNull();
+  });
+
+  it("setHomeGeo is exposed through getProfile", () => {
+    store.setHomeGeo({ query: "gent", label: "Gent, BE", lat: 51, lon: 3 });
+    expect(store.getProfile()).toMatchObject({ homeGeo: { label: "Gent, BE", lat: 51, lon: 3 }, homeGeoError: null });
+    expect(store.getHomeQuery()).toBe("gent");
+    store.setHomeGeo({ query: "zzz", error: "Could not find" });
+    expect(store.getProfile()).toMatchObject({ homeGeo: null, homeGeoError: "Could not find" });
+  });
+
+  it("geo/travel work queues", () => {
+    const a = store.insertVacancy(nv(sid));
+    const b = store.insertVacancy(nv(sid));
+    const c = store.insertVacancy(nv(sid));
+    expect(store.vacanciesNeedingGeo(10).map((r) => r.id)).toEqual([a.id, b.id, c.id]);
+    expect(store.vacanciesNeedingGeo(10, [b.id]).map((r) => r.id)).toEqual([b.id]);
+    store.saveVacancyGeo(a.id, { query: "gent", label: "Gent", lat: 51, lon: 3, state: "ok", error: null });
+    store.saveVacancyGeo(b.id, { query: "x", label: "", lat: null, lon: null, state: "not_found", error: "nope" });
+    expect(store.vacanciesNeedingGeo(10).map((r) => r.id)).toEqual([c.id]);
+    expect(store.vacanciesNeedingTravel("home1", 10).map((r) => r.id)).toEqual([a.id]);
+    store.saveTravel(a.id, { minutes: 30, km: 20, homeKey: "home1" });
+    expect(store.vacanciesNeedingTravel("home1", 10)).toEqual([]);
+    expect(store.vacanciesNeedingTravel("home2", 10).map((r) => r.id)).toEqual([a.id]);
+    store.clearTravel();
+    expect(store.getVacancy(a.id)).toMatchObject({ travelMinutes: null, travelKm: null, travelHomeKey: null, geoState: "ok" });
+    store.setStatus(a.id, "closed");
+    expect(store.vacanciesNeedingTravel("home1", 10)).toEqual([]);
+  });
+
+  it("listVacancies: maxTravelMinutes keeps unknown, sort distance puts unknown last", () => {
+    const mk = (min: number | null) => {
+      const v = store.insertVacancy(nv(sid));
+      store.saveVacancyGeo(v.id, { query: "q", label: "l", lat: 1, lon: 1, state: min === null ? "pending" : "ok", error: null });
+      if (min !== null) store.saveTravel(v.id, { minutes: min, km: min / 2, homeKey: "h" });
+      return v.id;
+    };
+    const far = mk(80);
+    const unknown = mk(null);
+    const near = mk(10);
+    const mid = mk(40);
+    expect(store.listVacancies(filter({ sort: "distance" })).map((r) => r.id)).toEqual([near, mid, far, unknown]);
+    expect(store.listVacancies(filter({ sort: "distance", maxTravelMinutes: 45 })).map((r) => r.id)).toEqual([near, mid, unknown]);
+    const item = store.listVacancies(filter({ sort: "distance" }))[0];
+    expect(item).toMatchObject({ travelMinutes: 10, travelKm: 5, geoState: "ok" });
+    expect(store.getVacancyDetail(near)).toMatchObject({ geoQuery: "q", geoLabel: "l", geoError: null, travelMinutes: 10 });
+  });
+
+  it("updateIdentity resets geo_state to pending only when the location changes", () => {
+    const v = store.insertVacancy(nv(sid, { location: "Gent" }));
+    store.saveVacancyGeo(v.id, { query: "Gent", label: "Gent", lat: 1, lon: 1, state: "ok", error: null });
+    store.updateIdentity(v.id, { organization: "New org", location: "Gent" });
+    expect(store.getVacancy(v.id)!.geoState).toBe("ok");
+    store.updateIdentity(v.id, { location: "" });
+    expect(store.getVacancy(v.id)!.geoState).toBe("ok");
+    store.updateIdentity(v.id, { location: "Lendelede" });
+    expect(store.getVacancy(v.id)).toMatchObject({ location: "Lendelede", geoState: "pending" });
   });
 });

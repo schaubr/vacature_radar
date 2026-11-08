@@ -59,7 +59,23 @@ function install() {
     { id: 11, sourceId: 1, title: "Sociaal werker eerstelijnszone", org: "Eerstelijnszone Meetjesland", loc: "Eeklo", status: "new", score: null, bucket: null, state: "error", seen: 2 * H, err: "Detail page returned HTTP 503" },
   ];
 
+  type Geo = Pick<VacancyDetail, "travelMinutes" | "travelKm" | "geoState" | "geoQuery" | "geoLabel" | "geoError">;
+  const ok = (q: string, label: string, travelMinutes: number, travelKm: number): Geo => ({ travelMinutes, travelKm, geoState: "ok", geoQuery: q, geoLabel: label, geoError: null });
+  const geoById: Record<number, Geo> = {
+    1: ok("Lendelede", "Lendelede, West-Vlaanderen, BE", 52, 63),
+    2: ok("Gent", "Gent, Oost-Vlaanderen, BE", 6, 4.1),
+    3: { travelMinutes: null, travelKm: null, geoState: "unavailable", geoQuery: "Zwevegem", geoLabel: "", geoError: null },
+    4: ok("Deinze", "Deinze, Oost-Vlaanderen, BE", 22, 19),
+    5: ok("Antwerpen", "Antwerpen, BE", 61, 72),
+    6: ok("Brussel", "Brussel, BE", 48, 57),
+    7: ok("Gent", "Gent, Oost-Vlaanderen, BE", 8, 5.5),
+    8: ok("Kortrijk", "Kortrijk, West-Vlaanderen, BE", 41, 52),
+    9: { travelMinutes: 38, travelKm: 42, geoState: "approximate", geoQuery: "Oost-Vlaanderen", geoLabel: "Oost-Vlaanderen, BE", geoError: null },
+    10: ok("Aalst", "Aalst, Oost-Vlaanderen, BE", 32, 30),
+    11: { travelMinutes: null, travelKm: null, geoState: "not_found", geoQuery: "Meetjesland Zuid", geoLabel: "", geoError: "No match for this place" },
+  };
   const vacancies: VacancyDetail[] = seeds.map((s) => ({
+    ...geoById[s.id],
     id: s.id, sourceId: s.sourceId, sourceName: sources.find((x) => x.id === s.sourceId)!.name, title: s.title, organization: s.org, location: s.loc,
     url: `https://example.org/vacature/${s.id}`, status: s.status, score: s.score, bucket: s.bucket, firstSeenAt: ago(s.seen), deadline: s.deadline ?? "", feedback: s.id === 7 ? "up" : null,
     scoreState: s.state, duplicateCount: s.dups ?? 0,
@@ -69,12 +85,15 @@ function install() {
     scoreModel: s.score != null ? "claude-opus-5-5" : null, scoredAt: s.score != null ? ago(s.seen - 60_000) : null, scoreError: s.err ?? null, prefilterReason: s.prefilter ?? null,
     feedbackNote: s.id === 7 ? "Exactly the kind of job I want." : "", duplicates: s.dups ? [{ id: 101, url: "https://vdab.be/x", sourceName: "VDAB: maatschappelijk werker" }, { id: 102, url: "https://jobsolutions.be/y", sourceName: "Jobsolutions" }] : [], lastSeenAt: ago(0.4 * H),
   }));
+  vacancies.find((v) => v.id === 9)!.location = "Oost-Vlaanderen";
 
   let profile: Profile = {
     markdown: `# Sam Peeters\n**Headline:** Social worker | Community care | Gent\n\n## Summary\nMotivated social worker with four years of experience in local social services and homeless care. Strong in intake, case management and networking with partners.\n\n## Experience\n- **Maatschappelijk werker**, OCMW Gent (2022 - present)\n  - Intake and follow-up of help requests\n  - Cooperation with CAW and primary care\n- **Stagiair**, CAW Oost-Vlaanderen (2021)\n\n## Education\n- Bachelor Sociaal Werk, Hogeschool Gent (2018 - 2021)\n\n## Skills\nCase management, motivational interviewing, Dutch (native), English (C1), French (B1)\n`,
     preferences: { ...DEFAULT_PREFERENCES, homeLocation: "Gent", maxCommute: "max 45 min by train or 40 km", regions: "Oost-Vlaanderen, West-Vlaanderen, Brussel", hours: "fulltime", contractTypes: ["permanent"], desiredRoles: "Maatschappelijk werker, begeleider, coordinator welzijn", ambitions: "Grow towards coordination within 5 years.", dealBreakers: "Regular night shifts.", salaryNotes: "B1-B3 or equivalent", includeKeywords: [], excludeKeywords: ["poetsvrouw", "chauffeur"] },
     version: 4, importedFrom: "linkedin_zip", updatedAt: ago(2 * D),
+    homeGeo: { label: "Gent, Oost-Vlaanderen, BE", lat: 51.054, lon: 3.717 }, homeGeoError: null,
   };
+  let orsKey: string | null = "5b3ce3597851110001cf6248…";
   let settings: Settings = { ...DEFAULT_SETTINGS };
   let keyConfigured = true;
   let scanning = false;
@@ -88,11 +107,11 @@ function install() {
 
   const listeners = new Map<string, Set<(p: unknown) => void>>();
   const emit = <E extends keyof RadarEvents>(e: E, p: RadarEvents[E]) => listeners.get(e)?.forEach((cb) => cb(p));
-  const status = (): AppStatus => ({ scanning, currentSourceId, queueLength: scanning ? 1 : 0, nextScanAt: new Date(Date.now() + 2.5 * H).toISOString(), apiKeyConfigured: keyConfigured, budgetExceeded: false, profileReady: profile.markdown.trim() !== "" });
+  const status = (): AppStatus => ({ scanning, currentSourceId, queueLength: scanning ? 1 : 0, nextScanAt: new Date(Date.now() + 2.5 * H).toISOString(), apiKeyConfigured: keyConfigured, budgetExceeded: false, profileReady: profile.markdown.trim() !== "", travelConfigured: orsKey !== null && profile.homeGeo !== null });
 
   const toItem = (v: VacancyDetail): VacancyListItem => {
-    const { description, snippet, fields, scoreResult, scoreModel, scoredAt, scoreError, prefilterReason, feedbackNote, duplicates, lastSeenAt, ...rest } = v;
-    void description; void snippet; void fields; void scoreResult; void scoreModel; void scoredAt; void scoreError; void prefilterReason; void feedbackNote; void duplicates; void lastSeenAt;
+    const { geoQuery, geoLabel, geoError, description, snippet, fields, scoreResult, scoreModel, scoredAt, scoreError, prefilterReason, feedbackNote, duplicates, lastSeenAt, ...rest } = v;
+    void geoQuery; void geoLabel; void geoError; void description; void snippet; void fields; void scoreResult; void scoreModel; void scoredAt; void scoreError; void prefilterReason; void feedbackNote; void duplicates; void lastSeenAt;
     return rest;
   };
   const listFilter = (f: VacancyFilter) => {
@@ -103,7 +122,11 @@ function install() {
       .filter((v) => f.sourceId == null || v.sourceId === f.sourceId)
       .filter((v) => !q || `${v.title} ${v.organization} ${v.location}`.toLowerCase().includes(q))
       .filter((v) => f.includeUnscored || v.score != null)
-      .sort((a, b) => (f.sort === "score" ? (b.score ?? -1) - (a.score ?? -1) : Date.parse(b.firstSeenAt) - Date.parse(a.firstSeenAt)))
+      .filter((v) => f.maxTravelMinutes == null || v.travelMinutes == null || v.travelMinutes <= f.maxTravelMinutes)
+      .sort((a, b) =>
+        f.sort === "score" ? (b.score ?? -1) - (a.score ?? -1)
+        : f.sort === "distance" ? (a.travelMinutes ?? Infinity) - (b.travelMinutes ?? Infinity) || (b.score ?? -1) - (a.score ?? -1)
+        : Date.parse(b.firstSeenAt) - Date.parse(a.firstSeenAt))
       .map(toItem);
   };
 
@@ -129,13 +152,24 @@ function install() {
     "vacancies.openExternal": () => {},
     "vacancies.counts": () => ({ new: vacancies.filter((v) => v.status === "new").length, interested: vacancies.filter((v) => v.status === "interested").length, applied: vacancies.filter((v) => v.status === "applied").length, strongNew: vacancies.filter((v) => v.status === "new" && v.bucket === "strong").length, total: vacancies.length }),
     "profile.get": () => ({ ...profile }),
-    "profile.save": (input) => { profile = { ...profile, ...input, version: profile.version + 1, updatedAt: new Date().toISOString() }; emit("app.status", status()); return { ...profile }; },
+    "profile.save": (input) => {
+      profile = { ...profile, ...input, version: profile.version + 1, updatedAt: new Date().toISOString() };
+      const home = profile.preferences.homeLocation.trim();
+      profile.homeGeo = home && !/^x/i.test(home) ? { label: `${home}, Oost-Vlaanderen, BE`, lat: 51, lon: 3.7 } : null;
+      profile.homeGeoError = home && !profile.homeGeo ? `Could not find “${home}”` : null;
+      emit("app.status", status());
+      return { ...profile };
+    },
     "profile.import": async () => { await sleep(900); profile = { ...profile, importedFrom: "linkedin_zip", version: profile.version + 1, updatedAt: new Date().toISOString() }; return { ...profile }; },
     "settings.get": () => ({ ...settings }),
     "settings.save": (patch) => { settings = { ...settings, ...patch }; return { ...settings }; },
     "apiKey.status": () => ({ configured: keyConfigured, masked: keyConfigured ? "sk-ant-…x7Qd" : null }),
     "apiKey.set": async (k) => { await sleep(500); if (!k.startsWith("sk-")) return { ok: false, error: "Invalid Anthropic API key" }; keyConfigured = true; emit("app.status", status()); return { ok: true, error: null }; },
     "apiKey.clear": () => { keyConfigured = false; emit("app.status", status()); },
+    "orsKey.status": () => ({ configured: orsKey !== null, masked: orsKey ? "5b3ce3…f6248" : null }),
+    "orsKey.set": async (k) => { await sleep(600); if (k.trim().length < 20) return { ok: false, error: "Invalid OpenRouteService API key" }; orsKey = k; emit("app.status", status()); return { ok: true, error: null }; },
+    "orsKey.clear": () => { orsKey = null; emit("app.status", status()); },
+    "travel.recompute": async () => { await sleep(1500); return { updated: vacancies.filter((v) => v.geoState === "ok" || v.geoState === "approximate").length, failed: vacancies.filter((v) => v.geoState === "not_found").length }; },
     "usage.summary": (): UsageSummary => ({
       monthUsd: 1.846, budgetUsd: settings.monthlyBudgetUsd, budgetExceeded: false,
       byPurpose: [{ purpose: "score", usd: 1.52, calls: 61 }, { purpose: "learn_recipe", usd: 0.21, calls: 3 }, { purpose: "extract_listing", usd: 0.09, calls: 4 }, { purpose: "profile_import", usd: 0.026, calls: 1 }],

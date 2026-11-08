@@ -15,7 +15,9 @@ import { ScanService } from "../core/scan/scanner";
 import { Scheduler } from "../core/scan/scheduler";
 import { seedSources } from "../core/seed";
 import { RadarService } from "../core/service";
-import { electronRawFetch } from "./electron-fetch";
+import { OrsClient } from "../core/geo/ors";
+import { TravelService } from "../core/geo/travel";
+import { electronJsonHttp, electronRawFetch } from "./electron-fetch";
 import { ElectronRenderer } from "./electron-render";
 import { registerIpc } from "./ipc";
 import { SafeStorageSecrets } from "./secrets";
@@ -108,6 +110,7 @@ function start(): void {
   seedSources(db);
 
   const secrets = new SafeStorageSecrets(userData);
+  const orsSecrets = new SafeStorageSecrets(userData, "ors-secret.bin");
   const fetcher = new PoliteFetcher(electronRawFetch, { onWarn: (m) => db.log("warn", m) });
   const renderer = new ElectronRenderer();
   const llm = new AnthropicLlmClient({
@@ -146,6 +149,14 @@ function start(): void {
   };
 
   const now = () => new Date();
+  const ors = new OrsClient({ http: electronJsonHttp, getKey: () => orsSecrets.get() });
+  const travel = new TravelService({
+    store: db,
+    ors,
+    orsConfigured: () => orsSecrets.get() !== null,
+    now,
+    log: (level, message) => db.log(level, message),
+  });
   const scanner = new ScanService({
     store: db,
     fetcher,
@@ -155,6 +166,7 @@ function start(): void {
     now,
     emit,
     llmConfigured: () => secrets.get() !== null,
+    travel,
   });
   const scheduler = new Scheduler({ store: db, scanner, now });
   const service = new RadarService({
@@ -163,6 +175,9 @@ function start(): void {
     scheduler,
     llm,
     secrets,
+    orsSecrets,
+    orsHttp: electronJsonHttp,
+    travel,
     shell: {
       openExternal: (url) => {
         if (/^https?:\/\//i.test(url)) void shell.openExternal(url);

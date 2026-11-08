@@ -37,6 +37,8 @@ const profile: Profile = {
   version: 1,
   importedFrom: "manual",
   updatedAt: null,
+  homeGeo: null,
+  homeGeoError: null,
 };
 
 describe("postProcessScore", () => {
@@ -143,5 +145,39 @@ describe("prompts", () => {
     expect(u.length).toBeLessThan(13500);
     const none = buildScoringUser({ title: "t", organization: "o", location: "l", sourceName: "s", url: "u", description: "d" }, []);
     expect(none.startsWith("# Vacancy")).toBe(true);
+  });
+
+  describe("travel line", () => {
+    const v = { title: "t", organization: "o", location: "Lendelede", sourceName: "s", url: "u", description: "d" };
+    const travel = { homeLabel: "Gent, Oost-Vlaanderen, Belgium", travelMinutes: 34, travelKm: 41, geoState: "ok" as const };
+
+    it("is placed right after the Location line when travel is known", () => {
+      const u = buildScoringUser(v, [], travel);
+      expect(u).toContain(
+        "Location: Lendelede\nTravel from the candidate's home (Gent, Oost-Vlaanderen, Belgium): 34 min by car, 41 km (car, without traffic; computed by a routing service)\nSource: s",
+      );
+    });
+
+    it("notes when only the region is known", () => {
+      const u = buildScoringUser(v, [], { ...travel, geoState: "approximate" });
+      expect(u).toContain("about 34 min by car, 41 km (car, without traffic; computed by a routing service) (only the region of the job is known)");
+    });
+
+    it("is absent without travel data", () => {
+      expect(buildScoringUser(v, [])).not.toContain("Travel from");
+      expect(buildScoringUser(v, [], null)).not.toContain("Travel from");
+      expect(buildScoringUser(v, [], { ...travel, travelMinutes: null })).not.toContain("Travel from");
+    });
+
+    it("the system prompt tells the model how to use it", () => {
+      expect(buildScoringSystem(profile, "en")[0].text).toContain("When a Travel line is present");
+    });
+
+    it("scoreVacancy passes the travel through to the user prompt", async () => {
+      let user = "";
+      const llm = { structured: async (req: any) => { user = req.user; return { data: req.schema.parse(out()), usage: {} as any }; }, text: async () => { throw new Error("x"); } };
+      await scoreVacancy(llm as any, DEFAULT_SETTINGS, profile, v, [], travel);
+      expect(user).toContain("Travel from the candidate's home");
+    });
   });
 });
