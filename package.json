@@ -37,7 +37,7 @@
           "target": "zip"
         }
       ],
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "artifactName": "Vacature-Radar-${version}-${arch}.${ext}",
       "category": "public.app-category.productivity",
       "identity": "-",
       "hardenedRuntime": false

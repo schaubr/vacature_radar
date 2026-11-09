@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Apple Silicon runner: dmg needs hdiutil and signing needs codesign, so this cannot run on Linux.
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      # Ad-hoc signing only (identity "-" in package.json); stop electron-builder from searching for certificates.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check tag matches package.json version
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          echo "Tag:                  ${GITHUB_REF_NAME}"
+          echo "package.json version: v${version}"
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not equal v${version} (package.json version)"
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # hdiutil sometimes fails on GitHub macOS runners with "create failed - Resource busy"; retry the whole build.
+      - name: Package (arm64)
+        run: |
+          set -euo pipefail
+          rm -rf release/
+          for attempt in 1 2 3; do
+            if npm run package; then exit 0; fi
+            echo "::warning::npm run package failed (attempt ${attempt}/3)"
+            [ "${attempt}" -lt 3 ] && sleep 15
+          done
+          echo "::error::npm run package failed after 3 attempts"
+          exit 1
+
+      # No rm -rf release/ here: the arm64 outputs must survive until the upload step.
+      - name: Package (universal)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if npm run package:universal; then exit 0; fi
+            echo "::warning::npm run package:universal failed (attempt ${attempt}/3)"
+            [ "${attempt}" -lt 3 ] && sleep 15
+          done
+          echo "::error::npm run package:universal failed after 3 attempts"
+          exit 1
+
+      - name: Verify signatures
+        run: |
+          set -euo pipefail
+          count=0
+          # The app name contains a space, so use find -print0 and a NUL-delimited read loop.
+          while IFS= read -r -d '' app; do
+            echo "== ${app}"
+            codesign --verify --deep --strict --verbose=2 "${app}"
+            codesign -dv "${app}"
+            count=$((count + 1))
+          done < <(find release/mac-arm64 release/mac-universal -maxdepth 1 -name '*.app' -print0)
+          if [ "${count}" -ne 2 ]; then
+            echo "::error::Expected 2 built apps (arm64 and universal), found ${count}"
+            exit 1
+          fi
+
+      - name: Write checksums
+        run: |
+          set -euo pipefail
+          cd release
+          files=()
+          while IFS= read -r -d '' f; do
+            files+=("$(basename "${f}")")
+          done < <(find . -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' \) -print0 | sort -z)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No dmg/zip files found in release/"
+            exit 1
+          fi
+          # Run inside release/ so the sums list bare file names.
+          shasum -a 256 "${files[@]}" | tee SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          notes="docs/release-notes/${tag}.md"
+          version="${tag#v}"
+
+          # Only dmg, zip and checksums; blockmaps are left out on purpose.
+          assets=()
+          while IFS= read -r -d '' f; do
+            assets+=("${f}")
+          done < <(find release -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' -o -name 'SHA256SUMS.txt' \) -print0 | sort -z)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::No release assets found"
+            exit 1
+          fi
+          printf 'Asset: %s\n' "${assets[@]}"
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "Release ${tag} exists; uploading assets with --clobber"
+            gh release upload "${tag}" "${assets[@]}" --clobber
+          else
+            if [ ! -f "${notes}" ]; then
+              echo "::error::Release notes file ${notes} is missing"
+              exit 1
+            fi
+            gh release create "${tag}" "${assets[@]}" \
+              --title "Vacature Radar ${version}" \
+              --notes-file "${notes}" \
+              --verify-tag
+          fi

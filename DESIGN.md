@@ -1296,7 +1296,7 @@ Owner request: one package that contains everything and can be dropped on anothe
   `"package:universal": "npm run build && electron-builder --mac dmg zip --universal"` (runs on Intel and Apple Silicon, about double size).
   Keep `dist:mac` as an alias of `package`. `npm start` keeps using `--dir` (the CLI flag overrides config targets).
 - Config: `build.mac.target` becomes `[{target:"dmg"},{target:"zip"}]` without arch (arch comes from the CLI flags), `artifactName`
-  `"${productName}-${version}-${arch}.${ext}"`, `dmg.contents` with the app and an `/Applications` link (standard drag-to-install window).
+  `"Vacature-Radar-${version}-${arch}.${ext}"` (no spaces: GitHub renames spaces in release asset names to dots), `dmg.contents` with the app and an `/Applications` link (standard drag-to-install window).
   Signing stays ad-hoc (`identity: "-"`): the target Mac shows an "unverified developer" warning on first open. Ideal: Apple Developer ID
   + notarization (99 USD/year); not worth it for personal use. DMG builds only run on macOS (hdiutil); building on Linux is unsupported.
 - README "Install on another Mac": build on the owner's Mac, copy the .dmg (USB stick, AirDrop, cloud drive), drag to Applications,

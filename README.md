@@ -43,7 +43,7 @@ Requirements on the other Mac: macOS 13 Ventura or newer. No Node, npm or Xcode 
    npm run package:universal
    ```
 
-3. Find the result in `release/`: `Vacature Radar-1.0.0-arm64.dmg` and `Vacature Radar-1.0.0-arm64.zip` (the universal build is named `Vacature Radar-1.0.0-universal.dmg` and `.zip`). The app inside is about 330 MB and fully self-contained.
+3. Find the result in `release/`: `Vacature-Radar-1.0.0-arm64.dmg` and `Vacature-Radar-1.0.0-arm64.zip` (the universal build is named `Vacature-Radar-1.0.0-universal.dmg` and `.zip`). The app inside is about 330 MB and fully self-contained.
 4. Copy the `.dmg` to the other Mac with a USB stick, AirDrop or a cloud drive. The `.zip` holds the same app if you prefer that.
 5. On the other Mac, open the `.dmg` and drag Vacature Radar onto the Applications link.
 6. First launch: the app is not signed with a paid Apple developer certificate, so macOS says it cannot verify the developer. Either of these gets past it:
