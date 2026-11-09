@@ -1024,3 +1024,75 @@ reset `geo_state` to 'pending' so travel is recomputed for the better location.
   ("Free account at openrouteservice.org, then copy the API key from the dashboard"), "Recompute all travel times" button with result,
   note "Car travel time without traffic. Free plan quotas are enough for normal use."
 - Mock: realistic travel data on most vacancies, one approximate, one not_found, one unavailable; orsKey and travel.recompute fakes.
+
+---
+
+## 15. Embedded job widgets and "why nothing?" diagnostics (added 2026-11-09)
+
+Trigger: Zorgnet-Icuro's job page (`test/fixtures/sites/zorgneticuro_list.html`, captured 2026-11-09) holds no vacancies.
+It contains `<div id="jbtcls_136_2067_content">` plus `<script src="//www.jobat.be/api/script/jobsitesscripts.js">` and
+`jbtClsInit(...)`: a Jobat widget fills the list after load, possibly inside a cross-origin iframe. The renderer missed it because
+(a) it serializes only the main document and (b) it stops when `innerText` is stable for 1.5 s, before late widgets arrive.
+A local reproduction (architect's harness, two origins: late iframe, iframe from the start, late DOM injection) returns 0 items
+for all three variants on the current build. Target: 5 items for each.
+
+### 15.1 Renderer (src/main/electron-render.ts)
+
+- Network-aware settling. Track in-flight requests of the scraper window through the `persist:scraper` session's
+  `webRequest.onBeforeRequest` / `onCompleted` / `onErrorOccurred` (filter on `details.webContentsId` of the scraper window; the
+  session is dedicated to scraping, so registering these listeners once is fine; always call the callback in onBeforeRequest).
+  A page is settled when ALL hold: at least 3000 ms since `did-finish-load`; zero in-flight requests for 1000 ms
+  (ignore long-polling: requests open longer than 10 s don't count); the combined text length of all frames unchanged over
+  3 polls (500 ms apart). Hard cap 30 s total, then capture whatever is there.
+- Frame capture. After settling, for every frame in `webContents.mainFrame.framesInSubtree` (main first), run in that frame:
+  rewrite links to absolute (`document.querySelectorAll('a[href]').forEach(a => a.setAttribute('href', a.href))`, same for
+  `iframe[src]`), then return `document.documentElement.outerHTML` (main) or `.innerHTML` (child frames).
+  Skip child frames whose URL is not http(s), is about:blank, or whose host matches a small denylist of non-content frames
+  (googletagmanager.com, google-analytics.com, doubleclick.net, google.com/recaptcha, facebook.com, youtube.com,
+  youtube-nocookie.com, vimeo.com, hotjar.com, cookiebot.com, onetrust.com). At most 10 child frames, each truncated to 2 MB.
+  Append each included child frame to the main HTML just before `</body>` as
+  `<section data-vr-frame-src="<frame url>">…</section>`. Frame failures (detached, timeout) are skipped, never fatal.
+- Return type: `PageRenderer.render(url)` becomes `Promise<{ url: string; html: string; frames?: { url: string; included: boolean }[] }>`
+  (optional field, backward compatible). List every child frame seen, with `included` false for skipped ones.
+
+### 15.2 Diagnostics (src/core/extract/diagnose.ts + SourceTestResult + scanner)
+
+```ts
+export interface PageDiagnostics {
+  modeUsed: "static" | "browser";
+  visibleTextChars: number;
+  linkCount: number;                                  // a[href] in the captured HTML (frames included)
+  frames: { url: string; included: boolean }[];       // browser mode only, else []
+  embeddedHosts: string[];                            // hosts of iframe[src] and script[src] that differ from the page host,
+                                                      // minus a denylist of trackers/CDNs (same list as 15.1 plus cdnjs, jsdelivr,
+                                                      // unpkg, googleapis, gstatic, cloudflare, jquery, cookielaw, polyfill.io)
+  llmUsed: boolean;                                   // LLM tiers were available and attempted
+  hint: string | null;                                // plain-language explanation, only when 0 items
+}
+export function diagnosePage(input: { html: string; pageUrl: string; modeUsed; frames; llmUsed: boolean; itemCount: number; llmAvailable: boolean }): PageDiagnostics;
+```
+
+Hint rules for itemCount 0, first match wins:
+1. `visibleTextChars < 300`: "The page is almost empty for an automated visitor. Try Browser mode; the site may also block automated access."
+2. embeddedHosts non-empty and modeUsed "static": "This page loads content from <hosts>. Switch the source to Browser mode so that content is included."
+3. embeddedHosts non-empty: "Vacancies may come from an embedded service (<hosts>). If they are still missing, add that service's own listing page as a source."
+4. `!llmAvailable`: keep the existing "No vacancies found. Add an Anthropic API key so Claude can learn this page's layout." (or the budget variant).
+5. llmUsed: "Claude looked at the page and found no individual vacancies on it."
+6. otherwise null.
+
+`SourceTestResult` gets `diagnostics: PageDiagnostics` (always present). The scanner computes diagnostics on 0-item scans too and
+uses the hint (when not null) as the source's `lastError` and log message, so the Sources table explains failures.
+Auto mode: if the static page has embeddedHosts (an iframe or widget script from another host) and yielded 0 items, the existing
+fallback to browser mode applies (it already retries on 0 items; keep that).
+
+### 15.3 UI
+
+Source editor Test panel: below the existing stats, a muted diagnostics line
+"Text 4,812 chars · 63 links · Frames: www.jobat.be (included), www.googletagmanager.com (skipped)" and, when items are 0 and a
+hint exists, the hint in a callout (info style) above the empty preview. Mock: one test URL returns a 0-item result with a Jobat
+embedded-service hint, others unchanged.
+
+### 15.4 Seed
+
+Zorgnet-Icuro seed source: renderMode "browser" (was auto) and notes "Vacancies come from an embedded Jobat widget. Use Test before enabling."
+Only affects new installs; do not migrate existing rows.
