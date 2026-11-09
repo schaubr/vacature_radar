@@ -1243,3 +1243,43 @@ notifications, sidebar wordmark). 17.1's data migration is dropped (userData sta
 graceful secret-decryption handling stays as robustness. Additions: top-level `productName` in package.json, an explicit translated
 application menu (`src/main/menu.ts`), About panel options, and `npm start` = build + `electron-builder --dir` + open the packaged app
 on macOS (the generic Electron bundle used by `npm run dev` shows "Electron" in the Dock and menu bar; only a packaged bundle carries the name).
+
+---
+
+## 18. Helan source and town-from-title travel upgrade (added 2026-11-09)
+
+### 18.1 Helan (seed revision 4)
+
+Owner request: `https://www.helanjobs.be/vacatures/?utm_source=helan.be&utm_medium=referral` (utm parameters are referral tracking;
+the seed uses the clean URL). Verified live 2026-11-09:
+- OTYS-powered site ("powered by OTYS"); vacancies are in the static HTML: `div.itemContainer` cards, title/link `h3.itemTitle a`
+  (detail URLs like `/vacatures/vacature_onthaalouder_groepsopvang_meerdonk_887084_11.html`), business unit in
+  `.matchCriteria-BusinessUnit > span`, region in `.matchCriteria-Regio > span`, contract types in `.matchCriteria-Contracttype > span`.
+  About 107 vacancies, 10 per page, newest first. robots.txt only lists a sitemap.
+- `.actIcLocation` and the detail page's JSON-LD `addressLocality` often hold a childcare venue name ("Koek en Kokola"), not a town.
+  The real town is usually the title suffix ("Onthaalouder groepsopvang - Meerdonk", "Begeleider in de kinderopvang - Hamme/Zele").
+- Pagination: `a.pnNext` ("Volgende >") to `/p/2/vacatures`. Page 2 needs the session cookie set by page 1: without it OTYS returns an
+  empty search form. Electron's `net.fetch` keeps session cookies (verified: page 2 returns 10 vacancies), so the app works; the Node
+  dev CLI does not keep cookies (documented limitation, not fixed).
+- Seed (since 4): name "Helan", url `https://www.helanjobs.be/vacatures/`, renderMode "static", maxPages 5 (newest 50), enabled true,
+  strategy "recipe", notes "Helan vacatures (kinderopvang, ziekenfonds, huishoudhulp, Heyo). OTYS site, 5 newest pages. Verified 2026-11-09.",
+  recipe:
+
+```json
+{"itemSelector":"div.itemContainer","titleSelector":"h3.itemTitle a","linkSelector":"h3.itemTitle a",
+ "organizationSelector":".matchCriteria-BusinessUnit > span","locationSelector":".matchCriteria-Regio > span",
+ "dateSelector":"","nextPageSelector":"a.pnNext"}
+```
+
+  The location is deliberately the region (always correct), never the venue name; 18.2 upgrades it to the town from the title.
+  Fixtures: `helan_list.html`, `helan_list_page2.html` (fetched with the session cookie), `helan_detail.html`.
+
+### 18.2 Town-from-title upgrade for travel (generic)
+
+In `src/core/geo/locate.ts` add `titleTownQuery(title: string): string | null`: take the part after the LAST " - " or " – " (also a
+trailing "(X)"), split on "/" and keep the first part, strip prefixes "regio ", "omgeving ", "te ", trim; accept only 1-3 words without
+digits and not a contract or hours word (voltijds, deeltijds, halftijds, vervanging, vervangingscontract, onbepaalde, bepaalde, duur,
+jobstudent, stage, interim, freelance, flexi, b1-b3 style scales, "m/v/x"). In `TravelService`, when a vacancy's location result is
+`approximate` (region/province layer) or `not_found`, and `titleTownQuery(title)` is non-null, geocode it as an organization-style query
+(must hit locality/localadmin/borough); if it hits, use it (state `ok`, `geoQuery` = the town) instead of the approximate/not-found result.
+Cached like any other query. The scoring prompt's travel line then reflects the precise town.
