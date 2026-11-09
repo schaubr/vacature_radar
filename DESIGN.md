@@ -1220,3 +1220,11 @@ about 45 vacancies. Verified 2026-11-09.", recipe:
 ```
 
 Fixtures: `test/fixtures/sites/socius_list.html` (page 1) and `socius_list_page2.html` (page 2).
+
+### 17.4 Decision change (2026-11-09): no rename
+
+The owner reversed 17.1: the name stays **Vacature Radar**, shown everywhere (Dock, macOS menu bar, window, About panel, tray,
+notifications, sidebar wordmark). 17.1's data migration is dropped (userData stays `~/Library/Application Support/Vacature Radar`);
+graceful secret-decryption handling stays as robustness. Additions: top-level `productName` in package.json, an explicit translated
+application menu (`src/main/menu.ts`), About panel options, and `npm start` = build + `electron-builder --dir` + open the packaged app
+on macOS (the generic Electron bundle used by `npm run dev` shows "Electron" in the Dock and menu bar; only a packaged bundle carries the name).
