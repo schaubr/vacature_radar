@@ -87,3 +87,34 @@ export function classifyHit(
   if (hit.layer === "region" || hit.layer === "macroregion" || hit.layer === "county") return "approximate";
   return "ok";
 }
+
+const TITLE_STOP_WORDS = new Set([
+  "voltijds", "deeltijds", "halftijds", "vervanging", "vervangingscontract", "onbepaalde", "bepaalde", "duur",
+  "jobstudent", "stage", "interim", "freelance", "flexi", "m", "v", "x", "h", "f", "d", "mvx", "mv", "vm",
+]);
+
+/** A town hidden in a vacancy title ("... - Meerdonk", "... (Gent)"), or null. Contract: DESIGN.md 18.2. */
+export function titleTownQuery(title: string): string | null {
+  let s = (title ?? "").replace(/\s+/g, " ").trim();
+  if (!s) return null;
+  const dash = Math.max(s.lastIndexOf(" - "), s.lastIndexOf(" – "));
+  const hasDash = dash >= 0;
+  let tail = hasDash ? s.slice(dash + 3).trim() : s;
+  const paren = /^(.*)\(([^()]*)\)\s*$/.exec(tail);
+  if (paren) {
+    // A bare "Titel (Plaats)" needs text before the parenthesis; a dash tail like "(Gent)" alone is fine too.
+    if (!hasDash && !paren[1]!.trim()) return null;
+    tail = paren[2]!.trim();
+  } else if (!hasDash) {
+    return null;
+  }
+  if (/\d/.test(tail)) return null;
+  tail = (tail.split("/")[0] ?? "").trim().replace(/^(regio|omgeving|te)\s+/i, "").trim();
+  const words = tail.split(" ").filter(Boolean);
+  if (words.length < 1 || words.length > 3) return null;
+  if (tail.length < 3) return null;
+  const lower = words.map((w) => w.toLowerCase().replace(/[.,;:]/g, ""));
+  if (lower.some((w) => TITLE_STOP_WORDS.has(w))) return null;
+  if (!/^[\p{L}][\p{L}\s'’.\-]*$/u.test(tail)) return null;
+  return titleCaseIfUpper(tail);
+}

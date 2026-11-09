@@ -9,6 +9,9 @@ const PLACES: Record<string, { lon: number; lat: number; label: string; layer: s
   lendelede: { lon: 3.25, lat: 50.88, label: "Lendelede, West-Vlaanderen, Belgium", layer: "locality", confidence: 0.9 },
   aalst: { lon: 4.04, lat: 50.94, label: "Aalst, Oost-Vlaanderen, Belgium", layer: "locality", confidence: 0.9 },
   "oost-vlaanderen": { lon: 3.9, lat: 51.0, label: "Oost-Vlaanderen, Belgium", layer: "region", confidence: 0.8 },
+  meerdonk: { lon: 4.2, lat: 51.2, label: "Meerdonk, Oost-Vlaanderen, Belgium", layer: "locality", confidence: 0.85 },
+  hamme: { lon: 4.1, lat: 51.1, label: "Hamme, Oost-Vlaanderen, Belgium", layer: "region", confidence: 0.8 },
+  venue: { lon: 4.3, lat: 51.3, label: "Venue", layer: "venue", confidence: 0.9 },
   fuzzy: { lon: 4.0, lat: 51.0, label: "Fuzzy", layer: "locality", confidence: 0.3 },
 };
 
@@ -43,7 +46,7 @@ interface Env {
   travel: TravelService;
   logs: string[];
   sid: number;
-  add(location: string, organization?: string): number;
+  add(location: string, organization?: string, title?: string): number;
   setHome(home: string): void;
 }
 
@@ -63,10 +66,10 @@ function mk(): Env {
   let n = 0;
   return {
     store, fake, travel, logs, sid,
-    add: (location, organization = "") => {
+    add: (location, organization = "", title = `J${n + 1}`) => {
       n++;
       return store.insertVacancy({
-        sourceId: sid, title: `J${n}`, url: `https://x.test/${n}`, organization, location, dateText: "", snippet: "",
+        sourceId: sid, title, url: `https://x.test/${n}`, organization, location, dateText: "", snippet: "",
         dedupeKey: `k${n}`, now: "2026-11-01T00:00:00Z",
       }).id;
     },
@@ -233,5 +236,46 @@ describe("TravelService", () => {
     expect(e.store.getVacancy(a)!.geoState).toBe("pending");
     expect(e.store.getVacancy(b)!.geoState).toBe("pending");
     expect(e.store.getVacancy(c)!.geoState).toBe("ok");
+  });
+
+  describe("town from title", () => {
+    it("upgrades an approximate region hit to the title town and computes travel from it", async () => {
+      const a = e.add("Oost-Vlaanderen", "Helan Kinderopvang", "Onthaalouder groepsopvang - Meerdonk");
+      const r = await e.travel.computeFor([a]);
+      expect(r).toEqual({ updated: 1, failed: 0 });
+      expect(e.store.getVacancy(a)).toMatchObject({
+        geoState: "ok", geoQuery: "Meerdonk", geoLabel: "Meerdonk, Oost-Vlaanderen, Belgium", geoLat: 51.2, geoLon: 4.2,
+      });
+      expect(e.store.getVacancy(a)!.travelMinutes).toBe(Math.round((Math.abs(4.2 - 3.72) * 3600 + 600) / 60));
+      // cached: no new geocode calls on a second vacancy with the same inputs
+      const before = e.fake.geocodes.length;
+      const b = e.add("Oost-Vlaanderen", "Helan Kinderopvang", "Onthaalouder groepsopvang - Meerdonk");
+      await e.travel.computeFor([b]);
+      expect(e.fake.geocodes).toHaveLength(before);
+      expect(e.store.getVacancy(b)).toMatchObject({ geoState: "ok", geoQuery: "Meerdonk" });
+    });
+
+    it("keeps the approximate result when the title town only hits a non-locality layer", async () => {
+      const a = e.add("Oost-Vlaanderen", "", "Begeleider - Hamme");
+      const b = e.add("Oost-Vlaanderen", "", "Begeleider - Venue");
+      await e.travel.computeFor([a, b]);
+      expect(e.store.getVacancy(a)).toMatchObject({ geoState: "approximate", geoQuery: "Oost-Vlaanderen" });
+      expect(e.store.getVacancy(b)).toMatchObject({ geoState: "approximate", geoQuery: "Oost-Vlaanderen" });
+    });
+
+    it("rescues a not_found location with a valid title town", async () => {
+      const a = e.add("Koek en Kokola", "", "Onthaalouder - Meerdonk");
+      await e.travel.computeFor([a]);
+      expect(e.store.getVacancy(a)).toMatchObject({ geoState: "ok", geoQuery: "Meerdonk" });
+    });
+
+    it("leaves behavior unchanged without a title town", async () => {
+      const a = e.add("Oost-Vlaanderen", "", "Klantenadviseur Service Center");
+      const b = e.add("Nergenshuizen", "", "Teamcoach - voltijds");
+      await e.travel.computeFor([a, b]);
+      expect(e.store.getVacancy(a)).toMatchObject({ geoState: "approximate", geoQuery: "Oost-Vlaanderen" });
+      expect(e.store.getVacancy(b)).toMatchObject({ geoState: "not_found" });
+      expect(e.fake.geocodes.sort()).toEqual(["gent", "nergenshuizen", "oost-vlaanderen"]);
+    });
   });
 });

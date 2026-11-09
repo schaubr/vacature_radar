@@ -8,4 +8,4 @@ export const VDAB_URL = "https://www.vdab.be/vindeenjob/vacatures?trefwoord=maat
 export const VVSG_URL = "https://www.vvsg.be/vacatures";
 export const JOBSOLUTIONS_URL = "https://www.jobsolutions.be/";
 
-export { VDAB_RECIPE, VVSG_RECIPE, JOBSOLUTIONS_RECIPE, FIOLA_RECIPE, SOCIUS_RECIPE } from "../src/core/seed";
+export { VDAB_RECIPE, VVSG_RECIPE, JOBSOLUTIONS_RECIPE, FIOLA_RECIPE, SOCIUS_RECIPE, HELAN_RECIPE } from "../src/core/seed";

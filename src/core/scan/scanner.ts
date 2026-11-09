@@ -417,7 +417,7 @@ export class ScanService {
           now: nowIso,
         });
         seenIds.push(row.id);
-        const dup = store.findDuplicateCandidate(row.dedupeKey, row.id, now);
+        const dup = store.findDuplicateCandidate(row, now);
         if (dup) store.setDuplicateOf(row.id, dup.id);
         else fresh.push(row);
       }

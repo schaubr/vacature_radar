@@ -10,7 +10,7 @@ import { seedSources, SEED_SOURCES } from "../src/core/seed";
 import { RadarService, type SecretsPort } from "../src/core/service";
 import { RADAR_METHODS, type RadarEvents } from "../src/shared/ipc";
 import { DEFAULT_PREFERENCES, type SourceInput } from "../src/shared/types";
-import { VVSG_RECIPE, VVSG_URL, fixture } from "./helpers";
+import { HELAN_RECIPE, VVSG_RECIPE, VVSG_URL, fixture } from "./helpers";
 
 const srcInput = (over: Partial<SourceInput> = {}): SourceInput => ({
   name: "VVSG", url: VVSG_URL, enabled: true, renderMode: "static", scanIntervalHours: null, maxPages: 1, notes: "", ...over,
@@ -70,12 +70,13 @@ describe("RadarService", () => {
     expect(seedSources(store)).toBe(SEED_SOURCES.length);
     expect(seedSources(store)).toBe(0);
     const list = store.listSources();
-    expect(list).toHaveLength(8);
+    expect(list).toHaveLength(9);
     expect(list.find((s) => s.name === "Fiola vzw")).toMatchObject({ url: "https://fiolavzw.be/vacatures/", enabled: true, renderMode: "static", strategy: "recipe" });
-    expect(list.at(-1)).toMatchObject({ name: "Socius (sociaal-cultureel werk)", url: "https://socius.be/vacature/", enabled: true, renderMode: "static", strategy: "recipe", maxPages: 3 });
-    expect(list.filter((s) => s.enabled).map((s) => s.renderMode)).toEqual(["browser", "browser", "static", "static", "static", "static"]);
+    expect(list.find((s) => s.name.startsWith("Socius"))).toMatchObject({ url: "https://socius.be/vacature/", enabled: true, renderMode: "static", strategy: "recipe", maxPages: 3 });
+    expect(list.at(-1)).toMatchObject({ name: "Helan", url: "https://www.helanjobs.be/vacatures/", enabled: true, renderMode: "static", strategy: "recipe", maxPages: 5, recipe: HELAN_RECIPE });
+    expect(list.filter((s) => s.enabled).map((s) => s.renderMode)).toEqual(["browser", "browser", "static", "static", "static", "static", "static"]);
     const withRecipe = list.filter((s) => s.recipe);
-    expect(withRecipe.map((s) => s.strategy)).toEqual(["recipe", "recipe", "recipe", "recipe", "recipe", "recipe"]);
+    expect(withRecipe.map((s) => s.strategy)).toEqual(["recipe", "recipe", "recipe", "recipe", "recipe", "recipe", "recipe"]);
     expect(list.filter((s) => !s.enabled).every((s) => s.recipe === null)).toBe(true);
     expect(list.filter((s) => !s.enabled).every((s) => /Use Test before enabling/.test(s.notes))).toBe(true);
     const zn = list.find((s) => s.name === "Zorgnet-Icuro")!;
@@ -98,24 +99,51 @@ describe("RadarService", () => {
 
     const socius = (store: Store) => store.listSources().find((s) => s.url === "https://socius.be/vacature/");
 
-    it("a fresh install gets all 8 seeds including Fiola and Socius and stores the revision", () => {
+    const helan = (store: Store) => store.listSources().find((s) => s.url === "https://www.helanjobs.be/vacatures/");
+    const upTo = (store: Store, rev: number) => {
+      for (const s of SEED_SOURCES.filter((x) => x.since > 1 && x.since <= rev)) {
+        const { since: _s, ...input } = s;
+        store.createSource(input);
+      }
+      store.setMeta("seedRevision", rev);
+    };
+
+    it("a fresh install gets all 9 seeds including Fiola, Socius and Helan and stores the revision", () => {
       const { store } = setup();
-      expect(seedSources(store)).toBe(8);
+      expect(seedSources(store)).toBe(9);
       expect(fiola(store)).toBeTruthy();
       expect(socius(store)).toBeTruthy();
-      expect(store.getMeta("seedRevision")).toBe(3);
+      expect(helan(store)).toMatchObject({ name: "Helan", enabled: true, renderMode: "static", strategy: "recipe", maxPages: 5 });
+      expect(store.getMeta("seedRevision")).toBe(4);
     });
 
-    it("a revision 2 install gains only Socius", () => {
+    it("a revision 3 install gains only Helan", () => {
       const store = legacy();
-      const { since: _s, ...fi } = SEED_SOURCES.find((x) => x.since === 2)!;
-      store.createSource(fi);
-      store.setMeta("seedRevision", 2);
+      upTo(store, 3);
       expect(seedSources(store)).toBe(1);
-      expect(store.listSources()).toHaveLength(8);
-      expect(socius(store)).toMatchObject({ enabled: true, renderMode: "static", strategy: "recipe", maxPages: 3 });
-      expect(store.getMeta("seedRevision")).toBe(3);
+      expect(store.listSources()).toHaveLength(9);
+      expect(helan(store)).toMatchObject({ enabled: true, strategy: "recipe", recipe: HELAN_RECIPE });
+      expect(store.getMeta("seedRevision")).toBe(4);
       expect(seedSources(store)).toBe(0);
+    });
+
+    it("a revision 2 install gains Socius and Helan", () => {
+      const store = legacy();
+      upTo(store, 2);
+      expect(seedSources(store)).toBe(2);
+      expect(store.listSources()).toHaveLength(9);
+      expect(socius(store)).toMatchObject({ enabled: true, renderMode: "static", strategy: "recipe", maxPages: 3 });
+      expect(store.getMeta("seedRevision")).toBe(4);
+      expect(seedSources(store)).toBe(0);
+    });
+
+    it("a deleted Helan is not re-added", () => {
+      const { store } = setup();
+      seedSources(store);
+      store.deleteSource(helan(store)!.id);
+      expect(seedSources(store)).toBe(0);
+      expect(helan(store)).toBeUndefined();
+      expect(store.listSources()).toHaveLength(8);
     });
 
     it("a deleted Socius is not re-added", () => {
@@ -124,14 +152,14 @@ describe("RadarService", () => {
       store.deleteSource(socius(store)!.id);
       expect(seedSources(store)).toBe(0);
       expect(socius(store)).toBeUndefined();
-      expect(store.listSources()).toHaveLength(7);
+      expect(store.listSources()).toHaveLength(8);
     });
 
-    it("an existing install without a revision gains Fiola and Socius", () => {
+    it("an existing install without a revision gains Fiola, Socius and Helan", () => {
       const store = legacy();
       expect(store.getMeta("seedRevision")).toBeNull();
-      expect(seedSources(store)).toBe(2);
-      expect(store.listSources()).toHaveLength(8);
+      expect(seedSources(store)).toBe(3);
+      expect(store.listSources()).toHaveLength(9);
       expect(fiola(store)).toMatchObject({ enabled: true, renderMode: "static", strategy: "recipe" });
       expect(seedSources(store)).toBe(0);
     });
@@ -143,14 +171,14 @@ describe("RadarService", () => {
       expect(seedSources(store)).toBe(0);
       expect(seedSources(store)).toBe(0);
       expect(fiola(store)).toBeUndefined();
-      expect(store.listSources()).toHaveLength(7);
+      expect(store.listSources()).toHaveLength(8);
     });
 
     it("does not duplicate a seed whose URL the owner already added (canonical compare)", () => {
       const store = legacy();
       store.createSource(srcInput({ name: "My Fiola", url: "https://FIOLAVZW.be/vacatures?utm_source=x" }));
-      expect(seedSources(store)).toBe(1); // only Socius
-      expect(store.listSources()).toHaveLength(8);
+      expect(seedSources(store)).toBe(2); // Socius and Helan
+      expect(store.listSources()).toHaveLength(9);
     });
   });
 

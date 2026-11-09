@@ -1,6 +1,6 @@
 import type { Store, VacancyRow } from "../db/store";
 import { normalizeGeoQuery } from "../db/store";
-import { classifyHit, locationQuery } from "./locate";
+import { classifyHit, locationQuery, titleTownQuery, type HitClass } from "./locate";
 import { OrsError, type GeoHit, type OrsClient } from "./ors";
 import { tEn, type Translator } from "../../shared/i18n";
 
@@ -141,61 +141,92 @@ export class TravelService {
 
   /** Returns false when ORS stopped us (auth/quota/network) and the run should end. */
   private async geocodeRows(ids: number[] | undefined, result: TravelResult): Promise<boolean> {
-    const { store, ors } = this.d;
+    const { store } = this.d;
     for (;;) {
       const rows = store.vacanciesNeedingGeo(BATCH, ids);
       if (rows.length === 0) return true;
       for (const row of rows) {
         const q = locationQuery(row);
-        if (!q) {
-          store.saveVacancyGeo(row.id, {
-            query: "", label: "", lat: null, lon: null, state: "not_found", error: this.t("geo.noPlace"),
-          });
-          continue;
-        }
-        const key = normalizeGeoQuery(q.query);
-        let hit: GeoHit | null;
-        const cached = store.getGeoCache(key);
-        if (cached) {
-          hit = cached.found && cached.lat !== null && cached.lon !== null
-            ? { lat: cached.lat, lon: cached.lon, label: cached.label, layer: cached.layer, confidence: cached.confidence ?? 0 }
-            : null;
-        } else {
-          try {
-            hit = await ors.geocode(q.query);
-          } catch (e) {
-            if (e instanceof OrsError && e.kind !== "bad_response") {
-              this.log("warn", this.t("geo.lookupStopped", { error: e.message }));
-              return false;
-            }
-            const msg = e instanceof Error ? e.message : String(e);
-            store.saveVacancyGeo(row.id, { query: q.query, label: "", lat: null, lon: null, state: "error", error: msg });
+        const town = titleTownQuery(row.title);
+        let best: { query: string; hit: GeoHit; cls: HitClass } | null = null;
+        let first: { query: string; hit: GeoHit | null; cls: HitClass } | null = null;
+        if (q) {
+          const r = await this.lookup(q.query);
+          if (r === "stop") return false;
+          if (r === "error") {
+            store.saveVacancyGeo(row.id, { query: q.query, label: "", lat: null, lon: null, state: "error", error: this.lastError });
             result.failed++;
             continue;
           }
-          store.putGeoCache({
-            query: key,
-            found: hit !== null,
-            lat: hit?.lat ?? null,
-            lon: hit?.lon ?? null,
-            label: hit?.label ?? "",
-            layer: hit?.layer ?? "",
-            confidence: hit?.confidence ?? null,
-            at: this.d.now?.().toISOString(),
-          });
+          const cls = classifyHit(r.hit, q.fromOrganization);
+          first = { query: q.query, hit: r.hit, cls };
+          if (r.hit && cls === "ok") best = { query: q.query, hit: r.hit, cls };
         }
-        const cls = classifyHit(hit, q.fromOrganization);
-        if (!hit || cls === "not_found") {
+        if (!best && town && normalizeGeoQuery(town) !== normalizeGeoQuery(q?.query ?? "")) {
+          const r = await this.lookup(town);
+          if (r === "stop") return false;
+          if (r !== "error" && r.hit) {
+            const cls = classifyHit(r.hit, true);
+            if (cls === "ok") best = { query: town, hit: r.hit, cls };
+          }
+        }
+        if (best) {
           store.saveVacancyGeo(row.id, {
-            query: q.query, label: "", lat: null, lon: null, state: "not_found", error: this.t("geo.couldNotPlace", { query: q.query }),
+            query: best.query, label: best.hit.label, lat: best.hit.lat, lon: best.hit.lon, state: "ok", error: null,
+          });
+        } else if (first && first.hit && first.cls === "approximate") {
+          store.saveVacancyGeo(row.id, {
+            query: first.query, label: first.hit.label, lat: first.hit.lat, lon: first.hit.lon, state: "approximate", error: null,
+          });
+        } else if (first) {
+          store.saveVacancyGeo(row.id, {
+            query: first.query, label: "", lat: null, lon: null, state: "not_found", error: this.t("geo.couldNotPlace", { query: first.query }),
           });
         } else {
           store.saveVacancyGeo(row.id, {
-            query: q.query, label: hit.label, lat: hit.lat, lon: hit.lon, state: cls, error: null,
+            query: "", label: "", lat: null, lon: null, state: "not_found", error: this.t("geo.noPlace"),
           });
         }
       }
     }
+  }
+
+  private lastError = "";
+
+  /** Cached geocode. "stop" = ORS auth/quota/network (end the run), "error" = bad response for this query. */
+  private async lookup(query: string): Promise<{ hit: GeoHit | null } | "stop" | "error"> {
+    const { store, ors } = this.d;
+    const key = normalizeGeoQuery(query);
+    const cached = store.getGeoCache(key);
+    if (cached) {
+      return {
+        hit: cached.found && cached.lat !== null && cached.lon !== null
+          ? { lat: cached.lat, lon: cached.lon, label: cached.label, layer: cached.layer, confidence: cached.confidence ?? 0 }
+          : null,
+      };
+    }
+    let hit: GeoHit | null;
+    try {
+      hit = await ors.geocode(query);
+    } catch (e) {
+      if (e instanceof OrsError && e.kind !== "bad_response") {
+        this.log("warn", this.t("geo.lookupStopped", { error: e.message }));
+        return "stop";
+      }
+      this.lastError = e instanceof Error ? e.message : String(e);
+      return "error";
+    }
+    store.putGeoCache({
+      query: key,
+      found: hit !== null,
+      lat: hit?.lat ?? null,
+      lon: hit?.lon ?? null,
+      label: hit?.label ?? "",
+      layer: hit?.layer ?? "",
+      confidence: hit?.confidence ?? null,
+      at: this.d.now?.().toISOString(),
+    });
+    return { hit };
   }
 
   private async matrixRows(

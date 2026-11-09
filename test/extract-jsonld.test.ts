@@ -84,4 +84,9 @@ describe("extractDetail", () => {
     expect(d.text.length).toBeGreaterThan(300);
     expect(d.organization).toBe("");
   });
+  it("reads the Helan detail page (venue name as location, organization Helan)", () => {
+    const d = extractDetail(fixture("helan_detail.html"), "https://www.helanjobs.be/x");
+    expect(d.organization).toBe("Helan");
+    expect(d.location).toBe("Koek en Kokola");
+  });
 });

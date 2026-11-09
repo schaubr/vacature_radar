@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyRecipe, findNextPage, recipeLooksHealthy } from "../src/core/extract/recipe";
 import type { Recipe } from "../src/shared/types";
-import { fixture, SOCIUS_RECIPE, JOBSOLUTIONS_RECIPE, JOBSOLUTIONS_URL, VDAB_RECIPE, VDAB_URL, VVSG_RECIPE, VVSG_URL } from "./helpers";
+import { fixture, HELAN_RECIPE, SOCIUS_RECIPE, JOBSOLUTIONS_RECIPE, JOBSOLUTIONS_URL, VDAB_RECIPE, VDAB_URL, VVSG_RECIPE, VVSG_URL } from "./helpers";
 
 describe("applyRecipe on fixtures", () => {
   it("vdab_list: 15 healthy items with canonical absolute urls", () => {
@@ -137,5 +137,32 @@ describe("Socius fixtures", () => {
     expect(items).toHaveLength(15);
     expect(items[0].organization).toBe("De Ambrassade / Vlaamse Jeugdraad");
     expect(next).toBe("https://socius.be/vacature/?wpv_view_count=31917-TCPID65678&wpv_paged=3");
+  });
+});
+
+describe("Helan fixtures", () => {
+  const URL1 = "https://www.helanjobs.be/vacatures/";
+  it("page 1: 10 healthy items, region as location, link to page 2", () => {
+    const html = fixture("helan_list.html");
+    const items = applyRecipe(html, URL1, HELAN_RECIPE);
+    expect(items).toHaveLength(10);
+    expect(recipeLooksHealthy(items)).toBe(true);
+    expect(items[0]).toMatchObject({
+      title: "Onthaalouder groepsopvang - Meerdonk",
+      organization: "Helan Kinderopvang",
+      location: "Oost-Vlaanderen",
+      url: "https://www.helanjobs.be/vacatures/vacature_onthaalouder_groepsopvang_meerdonk_887084_11.html",
+    });
+    // Multi-region card (Antwerpen, Vlaams-Brabant, Limburg): the first-line rule keeps only the first region.
+    expect(items[3].title).toBe("Expert Opleiding & Coaching");
+    expect(items[3].location).toBe("Antwerpen");
+    expect(findNextPage(html, URL1, HELAN_RECIPE)).toBe("https://www.helanjobs.be/p/2/vacatures");
+  });
+  it("page 2: 10 different items", () => {
+    const p1 = applyRecipe(fixture("helan_list.html"), URL1, HELAN_RECIPE).map((i) => i.url);
+    const p2 = applyRecipe(fixture("helan_list_page2.html"), URL1, HELAN_RECIPE);
+    expect(p2).toHaveLength(10);
+    expect(recipeLooksHealthy(p2)).toBe(true);
+    expect(p2.some((i) => p1.includes(i.url))).toBe(false);
   });
 });

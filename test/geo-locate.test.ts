@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyHit, locationQuery } from "../src/core/geo/locate";
+import { classifyHit, locationQuery, titleTownQuery } from "../src/core/geo/locate";
 
 const q = (location: string, organization = "") => locationQuery({ location, organization });
 
@@ -69,5 +69,22 @@ describe("classifyHit", () => {
   it("requires a locality-like layer for organization-derived queries", () => {
     for (const l of ["locality", "localadmin", "borough"]) expect(classifyHit(hit(0.9, l), true)).toBe("ok");
     for (const l of ["venue", "street", "address", "region", "county"]) expect(classifyHit(hit(0.9, l), true)).toBe("not_found");
+  });
+});
+
+describe("titleTownQuery", () => {
+  it.each([
+    ["Onthaalouder groepsopvang - Meerdonk", "Meerdonk"],
+    ["Begeleider in de kinderopvang - Hamme/Zele", "Hamme"],
+    ["Mobiele begeleider - regio Londerzeel", "Londerzeel"],
+    ["Maatschappelijk werker (Gent)", "Gent"],
+    ["Teamcoach - voltijds", null],
+    ["Maatschappelijk werker (B1-B3)", null],
+    ["COMMUNICATIEVERANTWOORDELIJKE (V/X/M) – Deeltijds (4/5de)", null],
+    ["Klantenadviseur Service Center", null],
+    ["Begeleider - Sint-Pieters-Leeuw", "Sint-Pieters-Leeuw"],
+    ["", null],
+  ])("%s -> %s", (title, expected) => {
+    expect(titleTownQuery(title)).toBe(expected);
   });
 });

@@ -13,7 +13,7 @@ import { ScanService } from "../src/core/scan/scanner";
 import type { RadarEvents } from "../src/shared/ipc";
 import type { Recipe, SourceInput } from "../src/shared/types";
 import { translatorFor, type Lang } from "../src/shared/i18n";
-import { VDAB_RECIPE, VDAB_URL, VVSG_RECIPE, VVSG_URL, fixture } from "./helpers";
+import { HELAN_RECIPE, VDAB_RECIPE, VDAB_URL, VVSG_RECIPE, VVSG_URL, fixture } from "./helpers";
 
 const VVSG_HTML = fixture("vvsg_list.html");
 const VVSG_ITEMS = applyRecipe(VVSG_HTML, VVSG_URL, VVSG_RECIPE);
@@ -204,6 +204,20 @@ describe("ScanService", () => {
     expect(e.llm.calls.score).toBe(scoreCalls);
     expect(rows(e)).toHaveLength(N); // duplicates are hidden from the list
     expect(e.store.getSource(b)!.lastFound).toBe(N);
+  });
+
+  it("lists every distinct URL of one source even when title+organization repeat (Helan)", async () => {
+    const e = mk();
+    const url = "https://www.helanjobs.be/vacatures/";
+    e.routes.set(url, fixture("helan_list.html"));
+    const id = e.addSource({ name: "Helan", url, recipe: HELAN_RECIPE });
+    const expected = applyRecipe(fixture("helan_list.html"), url, HELAN_RECIPE).map((i) => i.url);
+    expect(new Set(expected).size).toBe(10);
+    await e.scanner.scanSource(id);
+    await e.scanner.scanSource(id);
+    const listed = rows(e).map((r) => r.url).sort();
+    expect(listed).toEqual([...expected].sort());
+    expect(e.store.listVacancies({ statuses: [], minScore: null, sourceId: id, search: "", includeUnscored: true, maxTravelMinutes: null, sort: "date" })).toHaveLength(10);
   });
 
   it("applies the prefilter", async () => {

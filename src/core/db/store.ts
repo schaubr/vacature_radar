@@ -194,6 +194,27 @@ const str = (v: unknown): string => (v == null ? "" : String(v));
 const strOrNull = (v: unknown): string | null => (v == null ? null : String(v));
 const numOrNull = (v: unknown): number | null => (v == null ? null : Number(v));
 
+const REGION_NAMES = new Set([
+  "oost-vlaanderen", "west-vlaanderen", "vlaams-brabant", "limburg", "brussels gewest",
+  "brussel hoofdstedelijk gewest", "vlaanderen", "belgie", "belgië",
+]);
+
+function normLoc(s: string): string {
+  return (s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function isRegionName(n: string): boolean {
+  return REGION_NAMES.has(n) || n.startsWith("provincie ") || n.startsWith("regio ");
+}
+
+/** Two locations may describe the same job: either is empty, they are equal, or one is a region/province name. */
+function locationsCompatible(a: string, b: string): boolean {
+  const x = normLoc(a);
+  const y = normLoc(b);
+  if (!x || !y || x === y) return true;
+  return isRegionName(x) || isRegionName(y);
+}
+
 export class Store {
   private db: DatabaseSync;
   private insertsSincePrune = 0;
@@ -487,18 +508,31 @@ export class Store {
     });
   }
 
-  /** `now` is injectable for tests; defaults to the wall clock. */
-  findDuplicateCandidate(dedupeKey: string, excludeId: number, now: Date = new Date()): VacancyRow | null {
+  /**
+   * Finds the canonical vacancy this new row duplicates: same dedupe key, but only on a DIFFERENT source (two URLs on one
+   * site are different postings), and not when both locations are set, differ, and neither is a region name.
+   * `now` is injectable for tests; defaults to the wall clock.
+   */
+  findDuplicateCandidate(
+    v: { dedupeKey: string; id: number; sourceId: number; location: string },
+    now: Date = new Date(),
+  ): VacancyRow | null {
     const cutoff = new Date(now.getTime() - DUPLICATE_WINDOW_DAYS * 86_400_000).toISOString();
-    const r = this.one(
+    const rows = this.all(
       `SELECT * FROM vacancies
-       WHERE dedupe_key = ? AND id != ? AND duplicate_of IS NULL AND status != 'closed' AND first_seen_at >= ?
-       ORDER BY first_seen_at ASC, id ASC LIMIT 1`,
-      dedupeKey,
-      excludeId,
+       WHERE dedupe_key = ? AND id != ? AND source_id != ? AND duplicate_of IS NULL AND status != 'closed' AND first_seen_at >= ?
+       ORDER BY first_seen_at ASC, id ASC`,
+      v.dedupeKey,
+      v.id,
+      v.sourceId,
       cutoff,
     );
-    return r ? this.mapVacancy(r) : null;
+    for (const r of rows) {
+      const c = this.mapVacancy(r);
+      if (!locationsCompatible(v.location, c.location)) continue;
+      return c;
+    }
+    return null;
   }
 
   setDuplicateOf(id: number, canonicalId: number): void {

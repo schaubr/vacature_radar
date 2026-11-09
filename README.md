@@ -1,6 +1,6 @@
 # Vacature Radar
 
-A personal macOS menu-bar app that watches Flemish social-sector job sites (VDAB, VVSG, Jobsolutions, Fiola vzw, Socius and any listing page you add), extracts the vacancies, and scores each one against your LinkedIn profile with Claude. New strong matches arrive as a notification. Everything runs on your Mac.
+A personal macOS menu-bar app that watches Flemish social-sector job sites (VDAB, VVSG, Jobsolutions, Fiola vzw, Socius, Helan and any listing page you add), extracts the vacancies, and scores each one against your LinkedIn profile with Claude. New strong matches arrive as a notification. Everything runs on your Mac.
 
 ## Requirements
 

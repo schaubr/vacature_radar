@@ -283,20 +283,38 @@ describe("vacancies", () => {
     expect([today, none, applied, unscored].map((id) => store.getVacancy(id)!.status)).toEqual(["new", "new", "applied", "new"]);
   });
 
-  it("findDuplicateCandidate honours key, exclusion, closed, canonical-only and 60-day window", () => {
+  it("findDuplicateCandidate honours key, exclusion, closed, canonical-only and 60-day window (cross-source)", () => {
     const now = new Date("2026-11-08T00:00:00.000Z");
+    const sid2 = store.createSource({ name: "Other", url: "https://other.test", enabled: true, renderMode: "static", scanIntervalHours: null, maxPages: 1, notes: "" }).id;
     const first = store.insertVacancy(nv(sid, { dedupeKey: "k1", now: "2026-11-01T00:00:00.000Z" }));
-    const second = store.insertVacancy(nv(sid, { dedupeKey: "k1", now: "2026-11-02T00:00:00.000Z" }));
-    expect(store.findDuplicateCandidate("k1", second.id, now)?.id).toBe(first.id);
-    expect(store.findDuplicateCandidate("k1", first.id, now)?.id).toBe(second.id);
-    expect(store.findDuplicateCandidate("other", second.id, now)).toBeNull();
+    const second = store.insertVacancy(nv(sid2, { dedupeKey: "k1", now: "2026-11-02T00:00:00.000Z" }));
+    const q = (v: typeof first, d = now) => store.findDuplicateCandidate(v, d);
+    expect(q(second)?.id).toBe(first.id);
+    expect(q(first)?.id).toBe(second.id);
+    expect(q({ ...first, dedupeKey: "other" })).toBeNull();
     store.setDuplicateOf(first.id, second.id);
-    expect(store.findDuplicateCandidate("k1", 9999, now)?.id).toBe(second.id); // first is no longer canonical
+    expect(q({ ...first, id: 9999, sourceId: sid2 })).toBeNull(); // first is no longer canonical
+    expect(q({ ...first, id: 9999, sourceId: sid })?.id).toBe(second.id);
     store.setStatus(second.id, "closed");
-    expect(store.findDuplicateCandidate("k1", 9999, now)).toBeNull();
+    expect(q({ ...first, id: 9999, sourceId: sid })).toBeNull();
     const old = store.insertVacancy(nv(sid, { dedupeKey: "old", now: "2026-08-01T00:00:00.000Z" }));
-    expect(store.findDuplicateCandidate("old", old.id + 100, now)).toBeNull();
-    expect(store.findDuplicateCandidate("old", old.id + 100, new Date("2026-09-15T00:00:00.000Z"))?.id).toBe(old.id);
+    const probe = { dedupeKey: "old", id: old.id + 100, sourceId: sid2, location: "Gent" };
+    expect(store.findDuplicateCandidate(probe, now)).toBeNull();
+    expect(store.findDuplicateCandidate(probe, new Date("2026-09-15T00:00:00.000Z"))?.id).toBe(old.id);
+  });
+
+  it("findDuplicateCandidate ignores the same source and different towns, but matches town vs region", () => {
+    const now = new Date("2026-11-08T00:00:00.000Z");
+    const sid2 = store.createSource({ name: "Other", url: "https://other.test", enabled: true, renderMode: "static", scanIntervalHours: null, maxPages: 1, notes: "" }).id;
+    const a = store.insertVacancy(nv(sid, { dedupeKey: "dk", location: "Gent", now: "2026-11-01T00:00:00.000Z" }));
+    const same = store.insertVacancy(nv(sid, { dedupeKey: "dk", location: "Gent", now: "2026-11-02T00:00:00.000Z" }));
+    expect(store.findDuplicateCandidate(same, now)).toBeNull(); // same source
+    const probe = (location: string) => ({ dedupeKey: "dk", id: 99999, sourceId: sid2, location });
+    expect(store.findDuplicateCandidate(probe("Gent"), now)?.id).toBe(a.id);
+    expect(store.findDuplicateCandidate(probe("Aalst"), now)).toBeNull();
+    expect(store.findDuplicateCandidate(probe("Oost-Vlaanderen"), now)?.id).toBe(a.id);
+    expect(store.findDuplicateCandidate(probe("Provincie Antwerpen"), now)?.id).toBe(a.id);
+    expect(store.findDuplicateCandidate(probe(""), now)?.id).toBe(a.id);
   });
 
   it("saveDetail fills organization/location only when empty (listing values win)", () => {
@@ -308,6 +326,12 @@ describe("vacancies", () => {
     const e = store.insertVacancy(nv(sid, { organization: "", location: "" }));
     store.saveDetail(e.id, "t", { organization: "Detail Org", location: "Brugge" });
     expect(store.getVacancy(e.id)).toMatchObject({ organization: "Detail Org", location: "Brugge" });
+  });
+
+  it("saveDetail keeps a non-empty listing region over a detail venue name (Helan)", () => {
+    const v = store.insertVacancy(nv(sid, { organization: "Helan Kinderopvang", location: "Oost-Vlaanderen" }));
+    store.saveDetail(v.id, "t", { organization: "Helan", location: "Koek en Kokola" });
+    expect(store.getVacancy(v.id)).toMatchObject({ organization: "Helan Kinderopvang", location: "Oost-Vlaanderen" });
   });
 
   it("saveScore sets state, bucket, json and clears errors; setScoreState transitions", () => {

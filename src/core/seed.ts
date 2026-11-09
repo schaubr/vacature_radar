@@ -51,6 +51,16 @@ export const SOCIUS_RECIPE: Recipe = {
   nextPageSelector: "li.wpv_page_current + li a",
 };
 
+export const HELAN_RECIPE: Recipe = {
+  itemSelector: "div.itemContainer",
+  titleSelector: "h3.itemTitle a",
+  linkSelector: "h3.itemTitle a",
+  organizationSelector: ".matchCriteria-BusinessUnit > span",
+  locationSelector: ".matchCriteria-Regio > span",
+  dateSelector: "",
+  nextPageSelector: "a.pnNext",
+};
+
 const UNTESTED = "Seeded 2026-11-08. Use Test before enabling.";
 
 /** A seed entry; `since` is the seed revision that introduced it (see DESIGN.md 16.1). */
@@ -79,6 +89,11 @@ export const SEED_SOURCES: SeedSource[] = [
     maxPages: 3,
     notes: "Vacaturebank van Socius. 3 pages, about 45 vacancies. Verified 2026-11-09.",
   },
+  {
+    ...src("Helan", "https://www.helanjobs.be/vacatures/", "static", true, 4),
+    maxPages: 5,
+    notes: "Helan vacatures (kinderopvang, ziekenfonds, huishoudhulp, Heyo). OTYS site, 5 newest pages. Verified 2026-11-09.",
+  },
 ];
 
 const SEED_RECIPES: Record<string, Recipe> = {
@@ -88,6 +103,7 @@ const SEED_RECIPES: Record<string, Recipe> = {
   Jobsolutions: JOBSOLUTIONS_RECIPE,
   "Fiola vzw": FIOLA_RECIPE,
   "Socius (sociaal-cultureel werk)": SOCIUS_RECIPE,
+  Helan: HELAN_RECIPE,
 };
 
 /**
