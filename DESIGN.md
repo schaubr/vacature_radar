@@ -1132,3 +1132,91 @@ VAIA Talents), so the fix is generic.
   (e.g. `https://fiola-vzw.jobtoolz.com/nl`).
 - UI: when diagnostics.portals is non-empty, the Test panel shows the hint with a button "Add <host> as a source" that pre-fills a new
   source (name = "<page source name or host> (<Portal name>)", url = portal root URL, renderMode auto) in the Source editor.
+
+---
+
+## 17. Rename to "vacature-zoeker", English/Nederlands toggle, Socius source (added 2026-11-09)
+
+### 17.1 Rename (owner request: the app is called exactly `vacature-zoeker`, also in the menu bar and Dock)
+
+- `src/shared/app.ts`: `export const APP_NAME = "vacature-zoeker";` Every user-visible occurrence of the old name uses it.
+- package.json: `"name": "vacature-zoeker"`, build `productName: "vacature-zoeker"`. Keep `appId: "local.vacatureradar"` (notification permission
+  on macOS is tied to the bundle id; keeping it avoids re-asking). Packaged app: `release/mac-arm64/vacature-zoeker.app`.
+  The macOS menu bar (app menu) and Dock take the name from the bundle, so only the packaged app shows it; `npm start` shows "Electron" (document).
+- `app.setName(APP_NAME)` at the very top of main; window title and `index.html <title>` = APP_NAME; tray tooltip = APP_NAME.
+- **Data migration (must not lose the owner's data):** userData moves from `~/Library/Application Support/Vacature Radar` to
+  `~/Library/Application Support/vacature-zoeker`. Before the Store opens: if the new dir has no `radar.db` and
+  `path.join(app.getPath("appData"), "Vacature Radar", "radar.db")` exists, create the new dir and copy the database with
+  `new DatabaseSync(old).exec("VACUUM INTO '<new path>'")` (consistent copy even with WAL; escape quotes), then copy
+  `secret.bin` / `ors-secret.bin` if present, write `MIGRATED-TO-vacature-zoeker.txt` into the old dir, log
+  "Data migrated from Vacature Radar". Never delete the old dir. Skip all of this when `VACATURE_ZOEKER_USER_DATA` or the old
+  `VACATURE_RADAR_USER_DATA` override is set (accept both env names).
+- **Secrets after rename:** Electron's safeStorage key lives in a Keychain item named after the app, so secrets encrypted by the old
+  name may not decrypt. `SafeStorageSecrets.get()` must catch decryption failures, return null, and remember a flag so
+  `apiKey.status` / `orsKey.status` can return `needsReentry: true` (add optional field to both status types); the Settings card then
+  shows "Your key needs to be entered again after the rename" (translated). Never crash on this.
+
+### 17.2 Language toggle (English / Nederlands)
+
+- One app language. Reuse `Settings.outputLanguage` ("en" | "nl") as the single source of truth: it drives the UI, all main-process
+  texts and the language of Claude's explanations. Default stays "en". Switching is instant (no restart).
+- Toggle in two places: a compact segmented control "EN | NL" in the sidebar footer (above "Scan all now"), and the Settings row
+  "Language / Taal" (replacing "Output language"), with the note "Existing AI explanations keep their language until re-scored."
+- `src/shared/i18n/`: `index.ts` (`export type Lang = "en" | "nl"; export function translate(lang: Lang, key: MessageKey, params?: Record<string, string | number>): string`,
+  `{name}` placeholders, plurals via `key_one` / `key_other` + `count` param), `en.ts` (source of truth, `as const`), `nl.ts` typed so that a
+  missing or extra key is a compile error. Locale helpers: `formatDate`, `formatDateTime`, `formatRelative`, `formatNumber`, `formatUsd`
+  using `Intl` with "en-GB" / "nl-BE" (USD with `currencyDisplay: "narrowSymbol"`).
+- Renderer: `I18nProvider` + `useT()` returning `{ t, lang, setLang, fmt }`; language from settings, updated on `settings.save` and
+  `app.status` events. Every visible string goes through `t` (labels, buttons, placeholders, tooltips/title attributes, aria-labels,
+  empty states, keyboard hints, confirmations, error prefixes, the mock's UI-side text). Vacancy content and organization names are never
+  translated; model names, "robots.txt", "JSON-LD", "RSS", "API" stay as they are.
+- Main/core: a `t()` bound to the current setting at call time (`(key, params) => translate(store.getSettings().outputLanguage, key, params)`)
+  for: tray menu items and status line, notification titles/bodies, the import file dialog title and filter label, scan log messages,
+  source `lastError` texts, diagnostics hints, Test errors, API-key validation messages, data-migration log line. Texts stored before a
+  switch stay in their language (acceptable). Tray menu rebuilds when the language changes.
+- **Binding glossary (Flemish usage, informal "je"; translate everything else consistently with it):**
+
+| English | Nederlands |
+|---|---|
+| Inbox, Sources, Profile, Settings, Activity | Inbox, Bronnen, Profiel, Instellingen, Activiteit |
+| New, Seen, Interested, Applied, Dismissed, Closed | Nieuw, Gezien, Interessant, Gesolliciteerd, Niet relevant, Afgesloten |
+| Dismiss / Back to Seen | Niet relevant / Terug naar gezien |
+| Strong, Possible, Weak, Knockout | Sterk, Mogelijk, Zwak, Knock-out |
+| Pending, Filtered, Error, Skipped, Scored | In wachtrij, Gefilterd, Fout, Overgeslagen, Beoordeeld |
+| Diploma, Experience, Skills, Preferences (subscores) | Diploma, Ervaring, Vaardigheden, Voorkeuren |
+| Why it fits / Gaps / Confidence high-medium-low | Waarom het past / Aandachtspunten / Zekerheid hoog-gemiddeld-laag |
+| Summary, Full vacancy text | Samenvatting, Volledige vacaturetekst |
+| Sector, Hours, Contract, Diploma required, Experience required, Pay scale, Deadline | Sector, Werkregime, Contract, Vereist diploma, Vereiste ervaring, Barema, Solliciteren tot |
+| Open vacancy, Score anyway, Re-score | Vacature openen, Toch beoordelen, Opnieuw beoordelen |
+| Scan now, Scan all now, Next scan 14:05, Scanning…, Budget reached | Nu scannen, Alles nu scannen, Volgende scan om 14:05, Bezig met scannen…, Budget bereikt |
+| Add source, Edit source, Test, Save, Cancel, Delete, Quit | Bron toevoegen, Bron bewerken, Testen, Opslaan, Annuleren, Verwijderen, Afsluiten |
+| Recipe, Reset recipe, Strategy (feed, jsonld, recipe, llm) | Paginapatroon, Paginapatroon opnieuw leren, Methode (RSS-feed, gestructureerde data, paginapatroon, AI-extractie) |
+| Render mode Auto / Plain HTML / Browser | Weergave Automatisch / Gewone HTML / Browser |
+| first seen 2 d ago, +2 duplicates | eerst gezien 2 d geleden, +2 dubbels |
+| Search vacancies, All sources, Min score, Include unscored | Zoek vacatures, Alle bronnen, Min. score, Ook niet-beoordeeld |
+| Max drive, Distance, 34 min by car, 41 km from Gent (without traffic), matched:, region only | Max. rijtijd, Afstand, 34 min met de auto, 41 km vanaf Gent (zonder verkeer), gevonden:, enkel regio |
+| API key, Monthly budget, Usage this month, Scan interval, hours | API-sleutel, Maandbudget, Verbruik deze maand, Scaninterval, uur |
+| Notifications, Notify threshold, Launch at login | Meldingen, Meldingsdrempel, Openen bij aanmelden |
+| Scoring model, Utility model, Thinking effort Low/Medium/High | Beoordelingsmodel, Hulpmodel, Denkniveau Laag/Gemiddeld/Hoog |
+| Import LinkedIn export, Profile text, Home location, Maximum commute, Regions | LinkedIn-export importeren, Profieltekst, Woonplaats, Maximale pendeltijd, Regio's |
+| Hours any/full-time/part-time; contract permanent/temporary/replacement/freelance | Maakt niet uit/Voltijds/Deeltijds; Vast/Tijdelijk/Vervanging/Freelance |
+| Desired roles, Ambitions, Deal-breakers, Salary notes, Include keywords, Exclude keywords | Gewenste functies, Ambities, Uitsluitingscriteria, Loonwensen, Verplichte trefwoorden, Uitsluitende trefwoorden |
+| 5 new strong matches | 5 nieuwe sterke matches |
+| Open vacature-zoeker | vacature-zoeker openen |
+
+### 17.3 Socius source (seed revision 3)
+
+Verified live 2026-11-09: `https://socius.be/vacature/` is a WordPress (Toolset Views) table, 15 vacancies per page, 3 pages
+(about 45), pagination via `?wpv_view_count=...&wpv_paged=N`, current page marked `li.wpv_page_current`; robots.txt allows it;
+detail pages give full text (salary, contract, deadline). It also has `/vacature/feed/` but that holds only the 10 newest, which would
+wrongly close older vacancies, so the list page is used. Seed (since 3): name "Socius (sociaal-cultureel werk)", url
+`https://socius.be/vacature/`, renderMode "static", maxPages 3, enabled true, strategy "recipe", notes "Vacaturebank van Socius. 3 pages,
+about 45 vacancies. Verified 2026-11-09.", recipe:
+
+```json
+{"itemSelector":"table.vacature-lijst tbody.wpv-loop > tr","titleSelector":"td:nth-child(1) a","linkSelector":"td:nth-child(1) a",
+ "organizationSelector":"td:nth-child(2)","locationSelector":"td:nth-child(3)","dateSelector":"td:nth-child(4)",
+ "nextPageSelector":"li.wpv_page_current + li a"}
+```
+
+Fixtures: `test/fixtures/sites/socius_list.html` (page 1) and `socius_list_page2.html` (page 2).
