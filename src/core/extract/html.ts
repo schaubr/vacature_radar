@@ -64,7 +64,7 @@ export function looksJsRendered(html: string): boolean {
   return hasShell && body.find("a[href]").length < 15;
 }
 
-const KEEP_ATTRS = new Set(["class", "id", "href", "datetime", "role", "aria-label"]);
+const KEEP_ATTRS = new Set(["class", "id", "href", "datetime", "role", "aria-label", "data-vr-frame-src"]);
 
 export function cleanHtmlForLlm(html: string, maxChars = 120_000): string {
   const $ = load(html);
@@ -124,6 +124,22 @@ export function cleanHtmlForLlm(html: string, maxChars = 120_000): string {
       }
     }
     body = best ? best.html : body.slice(0, Math.max(0, maxChars - prefix.length));
+    // Widget frames outside the chosen subtree (e.g. beside <main>) are re-appended while they fit, most links first.
+    if (best) {
+      const chosen = best.html;
+      const outside = $("section[data-vr-frame-src]")
+        .toArray()
+        .map((el) => ({ links: $(el).find("a[href]").length, html: $.html(el) }))
+        .filter((f) => !chosen.includes(f.html))
+        .sort((a, b) => b.links - a.links);
+      let used = prefix.length + body.length;
+      for (const f of outside) {
+        const h = f.html.replace(/>\s+</g, "><").replace(/\s{2,}/g, " ");
+        if (used + h.length > maxChars) continue;
+        body += h;
+        used += h.length;
+      }
+    }
   }
   return prefix + body;
 }
@@ -140,6 +156,12 @@ export function extractMainText(html: string, maxChars = 15_000): string {
     ["main", "article", "[role=main]", "body"].map((s) => $(s).first()).find((e) => e.length > 0) ?? $.root();
   const node = root.get(0);
   if (!node) return "";
-  const text = nodeText(node);
+  let text = nodeText(node);
+  // Widget frames outside the chosen container (e.g. beside <main>) are appended.
+  const extra = $("section[data-vr-frame-src]")
+    .toArray()
+    .filter((el) => !$.contains(node, el) && el !== node)
+    .map((el) => nodeText(el));
+  if (extra.length > 0) text = [text, ...extra].filter((t) => t !== "").join("\n");
   return text.length > maxChars ? text.slice(0, maxChars) : text;
 }

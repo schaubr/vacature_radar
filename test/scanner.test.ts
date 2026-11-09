@@ -17,6 +17,8 @@ import { VDAB_RECIPE, VDAB_URL, VVSG_RECIPE, VVSG_URL, fixture } from "./helpers
 const VVSG_HTML = fixture("vvsg_list.html");
 const VVSG_ITEMS = applyRecipe(VVSG_HTML, VVSG_URL, VVSG_RECIPE);
 const N = VVSG_ITEMS.length;
+const ZN_URL = "https://www.zorgneticuro.be/content/overzicht-jobs";
+const ZN_HTML = fixture("zorgneticuro_list.html");
 const SHELL = "<html><body><app-root></app-root></body></html>";
 
 const USAGE: LlmUsage = { model: "claude-opus-5-5", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.01 };
@@ -85,6 +87,7 @@ interface Env {
   renderCalls: string[];
   routes: Map<string, string>;
   renders: Map<string, string>;
+  renderFrames: Map<string, { url: string; included: boolean }[]>;
   setNow(iso: string): void;
   addSource(over?: Partial<SourceInput> & { recipe?: Recipe | null }): number;
 }
@@ -94,6 +97,7 @@ function mk(opts: { llm?: boolean; profile?: boolean; renderer?: boolean; travel
   if (opts.profile !== false) store.saveProfile({ markdown: "I am a social worker.", preferences: store.getProfile().preferences });
   const routes = new Map<string, string>();
   const renders = new Map<string, string>();
+  const renderFrames = new Map<string, { url: string; included: boolean }[]>();
   const rawCalls: string[] = [];
   const renderCalls: string[] = [];
   const raw: RawFetch = async (url) => {
@@ -115,7 +119,7 @@ function mk(opts: { llm?: boolean; profile?: boolean; renderer?: boolean; travel
             renderCalls.push(url);
             const html = renders.get(url) ?? (url.includes("/vacatures/") && url.includes("vdab") && !url.includes("trefwoord") ? fixture("vdab_detail.html") : undefined);
             if (html === undefined) throw new Error("render: no page for " + url);
-            return { url, html };
+            return { url, html, frames: renderFrames.get(url) };
           },
         };
   const fetcher = new PoliteFetcher(raw, { minIntervalMs: 0, sleep: async () => {} });
@@ -136,7 +140,7 @@ function mk(opts: { llm?: boolean; profile?: boolean; renderer?: boolean; travel
   });
   routes.set(VVSG_URL, VVSG_HTML);
   return {
-    store, scanner, llm, notes, events, rawCalls, renderCalls, routes, renders,
+    store, scanner, llm, notes, events, rawCalls, renderCalls, routes, renders, renderFrames,
     setNow: (iso) => (t = Date.parse(iso)),
     addSource(over = {}) {
       const { recipe, ...input } = over;
@@ -581,6 +585,17 @@ describe("ScanService", () => {
     await expect(noKey.scanner.scoreOne(any.id)).rejects.toThrow(/API key/);
   });
 
+  it("stores the diagnostic hint as lastError for a 0-item scan", async () => {
+    const e = mk({ llm: false });
+    e.routes.set(ZN_URL, ZN_HTML);
+    const id = e.addSource({ name: "ZN", url: ZN_URL, recipe: null });
+    await e.scanner.scanSource(id);
+    const s = e.store.getSource(id)!;
+    expect(s.lastStatus).toBe("empty");
+    expect(s.lastError).toMatch(/Switch the source to Browser mode/);
+    expect(e.store.listLog(20).some((l) => /www\.jobat\.be/.test(l.message))).toBe(true);
+  });
+
   describe("testSource", () => {
     it("extracts without writing vacancies and reports LLM cost", async () => {
       const e = mk();
@@ -622,10 +637,54 @@ describe("ScanService", () => {
 
     it("needs no LLM for sites with JSON-LD or a feed, and says so when nothing is found", async () => {
       const e = mk({ llm: false });
-      e.routes.set(VVSG_URL, "<html><body><p>x</p></body></html>");
+      e.routes.set(VVSG_URL, `<html><body><p>${"nothing to see here ".repeat(30)}</p></body></html>`);
       const r = await e.scanner.testSource({ url: VVSG_URL, renderMode: "static", maxPages: 1 });
       expect(r.ok).toBe(false);
       expect(r.error).toMatch(/No vacancies/);
+      expect(r.diagnostics.hint).toMatch(/No vacancies/);
+    });
+
+    it("always returns diagnostics, with a hint when nothing is found", async () => {
+      const e = mk();
+      const ok = await e.scanner.testSource({ url: VVSG_URL, renderMode: "static", maxPages: 1 });
+      expect(ok.diagnostics).toMatchObject({ modeUsed: "static", hint: null, llmUsed: true });
+      expect(ok.diagnostics.linkCount).toBeGreaterThan(0);
+      expect(ok.diagnostics.visibleTextChars).toBeGreaterThan(0);
+
+      const z = mk({ llm: false });
+      z.routes.set(ZN_URL, ZN_HTML);
+      const r = await z.scanner.testSource({ url: ZN_URL, renderMode: "static", maxPages: 1 });
+      expect(r.ok).toBe(false);
+      expect(r.diagnostics.embeddedHosts).toContain("www.jobat.be");
+      expect(r.diagnostics.hint).toMatch(/Browser mode/);
+      expect(r.error).toBe(r.diagnostics.hint);
+
+      const robots = mk();
+      robots.routes.set("https://www.vvsg.be/robots.txt", "User-agent: *\nDisallow: /");
+      const blocked = await robots.scanner.testSource({ url: VVSG_URL, renderMode: "static", maxPages: 1 });
+      expect(blocked.diagnostics.hint).toBeNull();
+    });
+
+    it("passes renderer frames through to the diagnostics", async () => {
+      const e = mk({ llm: false });
+      const frames = [{ url: "https://www.jobat.be/w", included: true }, { url: "https://www.googletagmanager.com/ns.html", included: false }];
+      e.renders.set(ZN_URL, ZN_HTML);
+      e.renderFrames.set(ZN_URL, frames);
+      const r = await e.scanner.testSource({ url: ZN_URL, renderMode: "browser", maxPages: 1 });
+      expect(r.modeUsed).toBe("browser");
+      expect(r.diagnostics.frames).toEqual(frames);
+      expect(r.diagnostics.hint).toMatch(/embedded service/);
+    });
+
+    it("finds JobPosting JSON-LD inside an appended frame section", async () => {
+      const e = mk({ llm: false });
+      const ld = (n: number) => ({ "@type": "JobPosting", title: `Begeleider ${n}`, url: `https://www.jobat.be/job/${n}`, hiringOrganization: { name: "Zorg" } });
+      const frame = `<section data-vr-frame-src="https://www.jobat.be/w"><script type="application/ld+json">${JSON.stringify([1, 2, 3].map(ld))}</script></section>`;
+      e.renders.set(ZN_URL, ZN_HTML.replace("</body>", frame + "</body>"));
+      const r = await e.scanner.testSource({ url: ZN_URL, renderMode: "browser", maxPages: 1 });
+      expect(r.ok).toBe(true);
+      expect(r.items).toHaveLength(3);
+      expect(r.diagnostics.hint).toBeNull();
     });
   });
 });

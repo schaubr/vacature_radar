@@ -71,7 +71,11 @@ describe("RadarService", () => {
     const withRecipe = list.filter((s) => s.recipe);
     expect(withRecipe.map((s) => s.strategy)).toEqual(["recipe", "recipe", "recipe", "recipe"]);
     expect(list.filter((s) => !s.enabled).every((s) => s.recipe === null)).toBe(true);
-    expect(list.filter((s) => !s.enabled).every((s) => s.renderMode === "auto" && /Use Test before enabling/.test(s.notes))).toBe(true);
+    expect(list.filter((s) => !s.enabled).every((s) => /Use Test before enabling/.test(s.notes))).toBe(true);
+    const zn = list.find((s) => s.name === "Zorgnet-Icuro")!;
+    expect(zn.renderMode).toBe("browser");
+    expect(zn.notes).toMatch(/embedded Jobat widget/);
+    expect(list.filter((s) => !s.enabled && s !== zn).every((s) => s.renderMode === "auto")).toBe(true);
   });
 
   it("sources CRUD emits events; update resets learned state; delete removes vacancies", async () => {

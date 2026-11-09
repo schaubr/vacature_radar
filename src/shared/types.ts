@@ -179,6 +179,17 @@ export interface Settings {
   launchAtLogin: boolean; // default true
 }
 
+/** Facts about a fetched page, plus a plain-language reason when it yielded no vacancies. */
+export interface PageDiagnostics {
+  modeUsed: "static" | "browser";
+  visibleTextChars: number;
+  linkCount: number;
+  frames: { url: string; included: boolean }[];
+  embeddedHosts: string[];
+  llmUsed: boolean;
+  hint: string | null;
+}
+
 export interface SourceTestResult {
   ok: boolean;
   error: string | null;
@@ -188,6 +199,7 @@ export interface SourceTestResult {
   items: ListingItem[]; // first 50
   robotsAllowed: boolean;
   llmCostUsd: number;
+  diagnostics: PageDiagnostics;
 }
 
 export interface UsageSummary {

@@ -122,7 +122,11 @@ export function SourceEditor({ source, onClose }: { source: Source | null; onClo
               <Fact label="Items" value={String(result.items.length)} tone={result.items.length ? "green" : "red"} />
               <Fact label="AI cost" value={usd(result.llmCostUsd)} />
             </div>
-            {result.error && <div className="callout red"><Icon name="warn" /><div><b>Problem</b><span>{result.error}</span></div></div>}
+            <div className="subtle diag-line">{diagLine(result)}</div>
+            {result.items.length === 0 && result.diagnostics.hint && (
+              <div className="callout info"><Icon name="info" /><div><b>Why nothing was found</b><span>{result.diagnostics.hint}</span></div></div>
+            )}
+            {result.error && result.error !== result.diagnostics.hint && <div className="callout red"><Icon name="warn" /><div><b>Problem</b><span>{result.error}</span></div></div>}
             {result.items.length > 0 && (
               <div className="preview">
                 <table className="table compact">
@@ -147,6 +151,13 @@ export function SourceEditor({ source, onClose }: { source: Source | null; onClo
       </div>
     </Modal>
   );
+}
+
+function diagLine(r: SourceTestResult): string {
+  const d = r.diagnostics;
+  const parts = [`Text ${d.visibleTextChars.toLocaleString("en-US")} chars`, `${d.linkCount.toLocaleString("en-US")} links`];
+  if (d.frames.length > 0) parts.push("Frames: " + d.frames.map((f) => `${hostOf(f.url) || f.url} (${f.included ? "included" : "skipped"})`).join(", "));
+  return parts.join(" · ");
 }
 
 function Fact({ label, value, tone }: { label: string; value: string; tone?: "green" | "red" }) {

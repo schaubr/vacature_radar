@@ -21,6 +21,7 @@ const PATHS: Record<string, string> = {
   upload: "M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3",
   reset: "M4 12a8 8 0 108-8M4 4v5h5",
   play: "M7 5l12 7-12 7V5z",
+  info: "M12 3a9 9 0 100 18 9 9 0 000-18zM12 11v6M12 7.5v.5",
   chevron: "M9 6l6 6-6 6",
   close: "M6 6l12 12M18 6L6 18",
   car: "M5 16v-4.5L7 7h10l2 4.5V16M5 16h14M5 16v2.5h3V16M16 16v2.5h3V16M7.5 12h9",

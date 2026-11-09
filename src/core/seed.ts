@@ -42,7 +42,10 @@ export const SEED_SOURCES: SourceInput[] = [
   src("VVSG (lokale besturen)", "https://www.vvsg.be/vacatures/overzicht-vacatures", "static", true),
   src("Jobsolutions", "https://www.jobsolutions.be/", "static", true),
   src("CAW (cawpro.be)", "https://www.cawpro.be/jobs/?caw-type=job", "auto", false),
-  src("Zorgnet-Icuro", "https://www.zorgneticuro.be/content/overzicht-jobs", "auto", false),
+  {
+    ...src("Zorgnet-Icuro", "https://www.zorgneticuro.be/content/overzicht-jobs", "browser", false),
+    notes: "Vacancies come from an embedded Jobat widget. Use Test before enabling.",
+  },
 ];
 
 const SEED_RECIPES: Record<string, Recipe> = {

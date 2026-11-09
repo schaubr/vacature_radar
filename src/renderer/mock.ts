@@ -141,7 +141,28 @@ function install() {
     "sources.create": (input) => { const s: Source = { ...src(nextId++, input.name, input.url, input.renderMode, null, null, "never", 0, 0), ...input, lastScanAt: null, lastSuccessAt: null }; sources.push(s); emit("sources.changed", {}); return s; },
     "sources.update": (id, patch) => { const s = sources.find((x) => x.id === id)!; Object.assign(s, patch); emit("sources.changed", {}); return { ...s }; },
     "sources.delete": (id) => { sources.splice(sources.findIndex((x) => x.id === id), 1); emit("sources.changed", {}); },
-    "sources.test": async (input) => { await sleep(800); const r: SourceTestResult = { ok: true, error: null, modeUsed: input.renderMode === "browser" ? "browser" : "static", strategy: "jsonld", recipe: null, items: testItems, robotsAllowed: true, llmCostUsd: 0 }; return r; },
+    "sources.test": async (input) => {
+      await sleep(800);
+      const modeUsed = input.renderMode === "browser" ? "browser" : "static";
+      if (/zorgneticuro/i.test(input.url)) {
+        const hint = modeUsed === "static"
+          ? "This page loads content from www.jobat.be. Switch the source to Browser mode so that content is included."
+          : "Vacancies may come from an embedded service (www.jobat.be). If they are still missing, add that service's own listing page as a source.";
+        const r: SourceTestResult = {
+          ok: false, error: hint, modeUsed, strategy: null, recipe: null, items: [], robotsAllowed: true, llmCostUsd: 0,
+          diagnostics: {
+            modeUsed, visibleTextChars: 4812, linkCount: 63, embeddedHosts: ["www.jobat.be"], llmUsed: false, hint,
+            frames: modeUsed === "browser" ? [{ url: "https://www.jobat.be/api/widget", included: true }, { url: "https://www.googletagmanager.com/ns.html", included: false }] : [],
+          },
+        };
+        return r;
+      }
+      const r: SourceTestResult = {
+        ok: true, error: null, modeUsed, strategy: "jsonld", recipe: null, items: testItems, robotsAllowed: true, llmCostUsd: 0,
+        diagnostics: { modeUsed, visibleTextChars: 9120, linkCount: 118, frames: [], embeddedHosts: [], llmUsed: false, hint: null },
+      };
+      return r;
+    },
     "sources.resetRecipe": (id) => { const s = sources.find((x) => x.id === id)!; s.strategy = null; s.recipe = null; emit("sources.changed", {}); return { ...s }; },
     "scan.now": (sourceId) => { scanning = true; currentSourceId = sourceId ?? 2; emit("app.status", status()); setTimeout(() => { scanning = false; currentSourceId = null; emit("app.status", status()); emit("vacancies.changed", { newIds: [] }); }, 2500); },
     "vacancies.list": (f) => listFilter(f),

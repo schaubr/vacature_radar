@@ -1,7 +1,8 @@
 import type { RadarEvents } from "../../shared/ipc";
-import type { RenderMode, Settings, Source, SourceTestResult, ExtractStrategy, ListingItem, Recipe } from "../../shared/types";
+import type { PageDiagnostics, RenderMode, Settings, Source, SourceTestResult, ExtractStrategy, ListingItem, Recipe } from "../../shared/types";
 import type { Store, VacancyRow } from "../db/store";
 import type { PoliteFetcher } from "../net/fetcher";
+import { NO_KEY_HINT, diagnosePage } from "../extract/diagnose";
 import type { PageRenderer } from "../net/render";
 import type { Notifier } from "../notify";
 import { BudgetExceededError, LlmNotConfiguredError, type LlmClient, type LlmUsage } from "../llm/client";
@@ -38,6 +39,8 @@ interface PageLoad {
   html: string;
   contentType: string;
   url: string;
+  /** Child frames seen by the browser renderer (browser mode only). */
+  frames?: { url: string; included: boolean }[];
 }
 
 interface ExtractOutcome {
@@ -50,6 +53,10 @@ interface ExtractOutcome {
   guardSkipped: boolean;
   /** The mode "auto" resolved to, if any. */
   detectedMode: Mode | null;
+  /** The (first) page the items were extracted from. */
+  page: PageLoad;
+  /** LLM tiers were available and attempted (not skipped by the unchanged-page guard). */
+  llmUsed: boolean;
 }
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -155,7 +162,7 @@ export class ScanService {
       if (!this.deps.renderer) throw new Error("Browser rendering is not available here");
       await this.deps.fetcher.throttle(url);
       const r = await this.deps.renderer.render(url);
-      return { html: r.html, contentType: "text/html", url: r.url || url };
+      return { html: r.html, contentType: "text/html", url: r.url || url, frames: r.frames };
     }
     const r = await this.deps.fetcher.fetch(url);
     return { html: r.body, contentType: r.contentType, url: r.url || url };
@@ -259,7 +266,26 @@ export class ScanService {
       pageHash: res.pageHash,
       guardSkipped: res.guardSkipped,
       detectedMode,
+      page,
+      llmUsed: llm !== null && !res.guardSkipped,
     };
+  }
+
+  /** Diagnostics for a loaded page, plus the message to show when it yielded no vacancies. */
+  private diagnose(out: ExtractOutcome, llmAvailable: boolean, settings: Settings): { diagnostics: PageDiagnostics; message: string } {
+    const diagnostics = diagnosePage({
+      html: out.page.html,
+      pageUrl: out.page.url,
+      modeUsed: out.modeUsed,
+      frames: out.page.frames ?? [],
+      llmUsed: out.llmUsed,
+      itemCount: out.items.length,
+      llmAvailable,
+    });
+    // The generic no-key hint is replaced by the existing no-key/budget messages (which know about the budget).
+    const message = diagnostics.hint === null || diagnostics.hint === NO_KEY_HINT ? this.noItemsMessage(settings) : diagnostics.hint;
+    if (out.items.length === 0 && diagnostics.hint !== null) diagnostics.hint = message;
+    return { diagnostics, message };
   }
 
   // ---------- scanning ----------
@@ -358,7 +384,7 @@ export class ScanService {
         this.deps.emit("sources.changed", {});
         return;
       }
-      fail(this.noItemsMessage(settings), "empty");
+      fail(this.diagnose(outcome, this.llmUsable(settings) !== null, settings).message, "empty");
       return;
     }
 
@@ -692,6 +718,15 @@ export class ScanService {
       items: [],
       robotsAllowed: true,
       llmCostUsd: cost,
+      diagnostics: {
+        modeUsed: input.renderMode === "browser" ? "browser" : "static",
+        visibleTextChars: 0,
+        linkCount: 0,
+        frames: [],
+        embeddedHosts: [],
+        llmUsed: false,
+        hint: null,
+      },
       ...over,
     });
     try {
@@ -709,9 +744,11 @@ export class ScanService {
         settings,
         llm: metered,
       });
+      const { diagnostics, message } = this.diagnose(out, metered !== null, settings);
       return result({
         ok: out.items.length > 0,
-        error: out.items.length > 0 ? null : this.noItemsMessage(settings),
+        error: out.items.length > 0 ? null : message,
+        diagnostics,
         modeUsed: out.modeUsed,
         strategy: out.strategy,
         recipe: out.recipe,
