@@ -662,9 +662,42 @@ describe("travel storage (user_version 2)", () => {
       const p = s.getProfile();
       expect(p).toMatchObject({ markdown: "md", version: 3, homeGeo: null, homeGeoError: null });
       expect(p.preferences.homeLocation).toBe("Gent");
+      expect(s.getMeta("seedRevision")).toBeNull();
+      s.setMeta("seedRevision", 2);
+      expect(s.getMeta("seedRevision")).toBe(2);
+      expect(Number(((s as unknown as { db: import("node:sqlite").DatabaseSync }).db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version)).toBe(3);
       s.close();
-      // reopening a v2 file does not migrate again
-      new Store(file).close();
+      // reopening a migrated file does not migrate again and keeps meta
+      const again = new Store(file);
+      expect(again.getMeta("seedRevision")).toBe(2);
+      again.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("upgrades a v2 database file to v3 (meta table), keeping data", async () => {
+    const { DatabaseSync } = await import("node:sqlite");
+    const dir = mkdtempSync(path.join(tmpdir(), "radar-mig2-"));
+    const file = path.join(dir, "radar.db");
+    try {
+      const first = new Store(file);
+      first.createSource(srcInput({ name: "Kept" }));
+      first.close();
+      // Roll back to a genuine v2 file: no meta table, user_version 2.
+      const raw = new DatabaseSync(file);
+      raw.exec("DROP TABLE meta; PRAGMA user_version = 2");
+      raw.close();
+
+      const s = new Store(file);
+      expect(s.listSources().map((x) => x.name)).toEqual(["Kept"]);
+      expect(s.getMeta("seedRevision")).toBeNull();
+      s.setMeta("k", { a: 1 });
+      expect(s.getMeta("k")).toEqual({ a: 1 });
+      s.close();
+      const check = new DatabaseSync(file);
+      expect(Number((check.prepare("PRAGMA user_version").get() as { user_version: number }).user_version)).toBe(3);
+      check.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

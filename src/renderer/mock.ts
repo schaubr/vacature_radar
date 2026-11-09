@@ -22,6 +22,7 @@ function install() {
     src(2, "VVSG (lokale besturen)", "https://www.vvsg.be/vacatures/overzicht-vacatures", "static", "static", "jsonld", "ok", 18, 0.5 * H),
     src(3, "Jobsolutions", "https://www.jobsolutions.be/", "auto", "static", "recipe", "empty", 0, 5 * H),
     src(4, "CAW (cawpro.be)", "https://www.cawpro.be/jobs/?caw-type=job", "auto", null, null, "error", 0, 5 * H, "The saved recipe matched 0 items and the AI fallback found no vacancy links. The page layout probably changed."),
+    { ...src(5, "Fiola vzw", "https://fiolavzw.be/vacatures/", "static", "static", "recipe", "never", 0, 0), lastScanAt: null, lastSuccessAt: null, notes: "Vacancy list on fiolavzw.be, detail pages on Jobtoolz (fiola-vzw.jobtoolz.com). Verified 2026-11-09." },
   ];
   function src(id: number, name: string, url: string, renderMode: Source["renderMode"], detectedMode: Source["detectedMode"], strategy: Source["strategy"], lastStatus: Source["lastStatus"], lastFound: number, since: number, lastError: string | null = null): Source {
     return {
@@ -144,14 +145,25 @@ function install() {
     "sources.test": async (input) => {
       await sleep(800);
       const modeUsed = input.renderMode === "browser" ? "browser" : "static";
-      if (/zorgneticuro/i.test(input.url)) {
-        const hint = modeUsed === "static"
-          ? "This page loads content from www.jobat.be. Switch the source to Browser mode so that content is included."
-          : "Vacancies may come from an embedded service (www.jobat.be). If they are still missing, add that service's own listing page as a source.";
+      if (/fiolavzw\.be/i.test(input.url)) {
+        const hint = "Vacancies on this page are hosted on Jobtoolz (fiola-vzw.jobtoolz.com). For the most reliable results, add https://fiola-vzw.jobtoolz.com/nl as a source.";
         const r: SourceTestResult = {
           ok: false, error: hint, modeUsed, strategy: null, recipe: null, items: [], robotsAllowed: true, llmCostUsd: 0,
           diagnostics: {
-            modeUsed, visibleTextChars: 4812, linkCount: 63, embeddedHosts: ["www.jobat.be"], llmUsed: false, hint,
+            modeUsed, visibleTextChars: 3150, linkCount: 41, frames: [], embeddedHosts: [], llmUsed: false, hint,
+            portals: [{ name: "Jobtoolz", host: "fiola-vzw.jobtoolz.com", sampleUrl: "https://fiola-vzw.jobtoolz.com/nl/begeleider-inclusieve-kinderopvang-fie-ola-herzele", kind: "link", companySpecific: true, rootUrl: "https://fiola-vzw.jobtoolz.com/nl" }],
+          },
+        };
+        return r;
+      }
+      if (/zorgneticuro/i.test(input.url)) {
+        const hint = modeUsed === "static"
+          ? "This page loads its vacancies from Jobat with a script. Use Browser mode; the app then captures the widget's content."
+          : "This page loads its vacancies from Jobat with a script, but nothing was captured. The widget may require interaction or block automated visitors.";
+        const r: SourceTestResult = {
+          ok: false, error: hint, modeUsed, strategy: null, recipe: null, items: [], robotsAllowed: true, llmCostUsd: 0,
+          diagnostics: {
+            modeUsed, visibleTextChars: 4812, linkCount: 63, embeddedHosts: ["www.jobat.be"], portals: [{ name: "Jobat", host: "www.jobat.be", sampleUrl: "https://www.jobat.be/nl/widget", kind: "script", companySpecific: false, rootUrl: "https://www.jobat.be/nl" }], llmUsed: false, hint,
             frames: modeUsed === "browser" ? [{ url: "https://www.jobat.be/api/widget", included: true }, { url: "https://www.googletagmanager.com/ns.html", included: false }] : [],
           },
         };
@@ -159,7 +171,7 @@ function install() {
       }
       const r: SourceTestResult = {
         ok: true, error: null, modeUsed, strategy: "jsonld", recipe: null, items: testItems, robotsAllowed: true, llmCostUsd: 0,
-        diagnostics: { modeUsed, visibleTextChars: 9120, linkCount: 118, frames: [], embeddedHosts: [], llmUsed: false, hint: null },
+        diagnostics: { modeUsed, visibleTextChars: 9120, linkCount: 118, frames: [], embeddedHosts: [], portals: [], llmUsed: false, hint: null },
       };
       return r;
     },

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { extractListing } from "../src/core/extract/listing";
+import { applyRecipe } from "../src/core/extract/recipe";
+import { extractListing, isNonVacancyTitle } from "../src/core/extract/listing";
 import type { ListingItem, Recipe } from "../src/shared/types";
-import { fixture, JOBSOLUTIONS_RECIPE, JOBSOLUTIONS_URL, VDAB_RECIPE, VDAB_URL, VVSG_URL } from "./helpers";
+import { fixture, JOBSOLUTIONS_RECIPE, JOBSOLUTIONS_URL, VDAB_RECIPE, FIOLA_RECIPE, VDAB_URL, VVSG_URL } from "./helpers";
 
 const item = (n: number): ListingItem => ({ title: `Job number ${n}`, url: `https://x.be/j/${n}`, organization: "", location: "", dateText: "", snippet: "" });
 const BAD: Recipe = { ...VDAB_RECIPE, itemSelector: ".does-not-exist" };
@@ -75,5 +76,39 @@ describe("extractListing tier order", () => {
     await expect(
       extractListing({ url: VVSG_URL, html: fixture("vvsg_list.html"), contentType: "text/html", existingRecipe: null, learnRecipe: async () => { throw new Error("budget"); } }),
     ).rejects.toThrow("budget");
+  });
+});
+
+describe("Fiola fixture and non-vacancy filter", () => {
+  const FIOLA_URL = "https://fiolavzw.be/vacatures/";
+  it("applyRecipe finds 4 cards; extractListing drops the spontaneous application", async () => {
+    const html = fixture("fiola_list.html");
+    expect(applyRecipe(html, FIOLA_URL, FIOLA_RECIPE)).toHaveLength(4);
+    const r = await extractListing({ url: FIOLA_URL, html, contentType: "text/html", existingRecipe: FIOLA_RECIPE });
+    expect(r.strategy).toBe("recipe");
+    expect(r.items).toHaveLength(3);
+    expect(r.items[0].location).toBe("Geraardsbergen");
+    expect(r.items.every((i) => new URL(i.url).hostname === "fiola-vzw.jobtoolz.com")).toBe(true);
+    expect(r.items.some((i) => /spontaan|spontane/i.test(i.title + i.url))).toBe(false);
+  });
+
+  it("filters every tier (feed, llm)", async () => {
+    const rss = `<rss><channel><item><title>Spontane sollicitatie</title><link>https://x.be/s</link></item><item><title>Sociaal werker</title><link>https://x.be/1</link></item></channel></rss>`;
+    const f = await extractListing({ url: "https://x.be/feed", html: rss, contentType: "application/rss+xml", existingRecipe: null });
+    expect(f.items.map((i) => i.title)).toEqual(["Sociaal werker"]);
+    const llm = await extractListing({
+      url: "https://x.be/", html: `<a href="/a">a</a>`, contentType: "text/html", existingRecipe: null,
+      llmExtract: async () => [{ ...item(1), title: "Open sollicitatie" }, item(2)],
+    });
+    expect(llm.items.map((i) => i.title)).toEqual(["Job number 2"]);
+  });
+
+  it("isNonVacancyTitle matches only pure open applications", () => {
+    for (const t of ["Spontane Sollicitatie", "  spontaan solliciteren! ", "Solliciteer spontaan", "OPEN SOLLICITATIE", "Open application", "Spontaneous application", "Candidature spontanée", "Candidature spontanee."]) {
+      expect(isNonVacancyTitle(t), t).toBe(true);
+    }
+    for (const t of ["Medewerker sollicitatiebegeleiding", "Begeleider inclusieve kinderopvang", "Open sollicitatie coördinator", "Sollicitatie"]) {
+      expect(isNonVacancyTitle(t), t).toBe(false);
+    }
   });
 });

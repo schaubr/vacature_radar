@@ -172,6 +172,9 @@ const MIGRATIONS: string[] = [
   CREATE TABLE geo_cache(query TEXT PRIMARY KEY, found INTEGER NOT NULL, lat REAL, lon REAL,
     label TEXT NOT NULL DEFAULT '', layer TEXT NOT NULL DEFAULT '', confidence REAL, at TEXT NOT NULL);
   `,
+  `
+  CREATE TABLE meta (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
+  `,
 ];
 
 const LOG_KEEP = 2000;
@@ -931,6 +934,21 @@ export class Store {
       }
     });
     return this.getSettings();
+  }
+
+  // ---------- meta (internal key-value state, not user settings) ----------
+
+  getMeta<T = unknown>(key: string): T | null {
+    const r = this.one("SELECT value_json FROM meta WHERE key = ?", key);
+    return r ? parseJson<T>(r.value_json) : null;
+  }
+
+  setMeta(key: string, value: unknown): void {
+    this.run(
+      "INSERT INTO meta (key, value_json) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+      key,
+      JSON.stringify(value),
+    );
   }
 
   // ---------- usage + log ----------

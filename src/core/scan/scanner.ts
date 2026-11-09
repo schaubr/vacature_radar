@@ -280,6 +280,7 @@ export class ScanService {
       frames: out.page.frames ?? [],
       llmUsed: out.llmUsed,
       itemCount: out.items.length,
+      itemUrls: out.items.map((i) => i.url),
       llmAvailable,
     });
     // The generic no-key hint is replaced by the existing no-key/budget messages (which know about the budget).
@@ -724,6 +725,7 @@ export class ScanService {
         linkCount: 0,
         frames: [],
         embeddedHosts: [],
+        portals: [],
         llmUsed: false,
         hint: null,
       },

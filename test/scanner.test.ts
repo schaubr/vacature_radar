@@ -592,8 +592,8 @@ describe("ScanService", () => {
     await e.scanner.scanSource(id);
     const s = e.store.getSource(id)!;
     expect(s.lastStatus).toBe("empty");
-    expect(s.lastError).toMatch(/Switch the source to Browser mode/);
-    expect(e.store.listLog(20).some((l) => /www\.jobat\.be/.test(l.message))).toBe(true);
+    expect(s.lastError).toMatch(/loads its vacancies from Jobat with a script. Use Browser mode/);
+    expect(e.store.listLog(20).some((l) => /loads its vacancies from Jobat/.test(l.message))).toBe(true);
   });
 
   describe("testSource", () => {
@@ -656,7 +656,8 @@ describe("ScanService", () => {
       const r = await z.scanner.testSource({ url: ZN_URL, renderMode: "static", maxPages: 1 });
       expect(r.ok).toBe(false);
       expect(r.diagnostics.embeddedHosts).toContain("www.jobat.be");
-      expect(r.diagnostics.hint).toMatch(/Browser mode/);
+      expect(r.diagnostics.portals.map((p) => p.host)).toEqual(["www.jobat.be"]);
+      expect(r.diagnostics.hint).toMatch(/loads its vacancies from Jobat with a script. Use Browser mode/);
       expect(r.error).toBe(r.diagnostics.hint);
 
       const robots = mk();
@@ -673,7 +674,7 @@ describe("ScanService", () => {
       const r = await e.scanner.testSource({ url: ZN_URL, renderMode: "browser", maxPages: 1 });
       expect(r.modeUsed).toBe("browser");
       expect(r.diagnostics.frames).toEqual(frames);
-      expect(r.diagnostics.hint).toMatch(/embedded service/);
+      expect(r.diagnostics.hint).toMatch(/with a script, but nothing was captured/);
     });
 
     it("finds JobPosting JSON-LD inside an appended frame section", async () => {

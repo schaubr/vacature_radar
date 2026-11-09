@@ -4,14 +4,26 @@ import { call, errMsg } from "../api";
 import { Icon, Modal, Switch } from "../components/ui";
 import { hostOf, usd } from "../util";
 
-export function SourceEditor({ source, onClose }: { source: Source | null; onClose: () => void }) {
-  const [name, setName] = useState(source?.name ?? "");
-  const [url, setUrl] = useState(source?.url ?? "");
-  const [renderMode, setRenderMode] = useState<RenderMode>(source?.renderMode ?? "auto");
-  const [maxPages, setMaxPages] = useState(String(source?.maxPages ?? 1));
+export function SourceEditor({
+  source,
+  prefill,
+  onAddPortal,
+  onClose,
+}: {
+  source: Source | null;
+  /** Initial values for a new source (ignored when editing an existing one). */
+  prefill?: Partial<SourceInput>;
+  /** Asks the parent to open a new editor pre-filled with a suggested portal source. */
+  onAddPortal?: (p: Partial<SourceInput>) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(source?.name ?? prefill?.name ?? "");
+  const [url, setUrl] = useState(source?.url ?? prefill?.url ?? "");
+  const [renderMode, setRenderMode] = useState<RenderMode>(source?.renderMode ?? prefill?.renderMode ?? "auto");
+  const [maxPages, setMaxPages] = useState(String(source?.maxPages ?? prefill?.maxPages ?? 1));
   const [interval, setIntervalH] = useState(source?.scanIntervalHours != null ? String(source.scanIntervalHours) : "");
-  const [notes, setNotes] = useState(source?.notes ?? "");
-  const [enabled, setEnabled] = useState(source?.enabled ?? true);
+  const [notes, setNotes] = useState(source?.notes ?? prefill?.notes ?? "");
+  const [enabled, setEnabled] = useState(source?.enabled ?? prefill?.enabled ?? true);
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<SourceTestResult | null>(null);
   const [testErr, setTestErr] = useState<string | null>(null);
@@ -19,6 +31,7 @@ export function SourceEditor({ source, onClose }: { source: Source | null; onClo
   const resultRef = useRef<HTMLDivElement>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
 
+  const addable = result?.diagnostics.portals.filter((p) => p.companySpecific && p.kind !== "script") ?? [];
   const pages = Math.min(5, Math.max(1, Math.round(Number(maxPages) || 1)));
   const validUrl = /^https?:\/\/\S+\.\S+/.test(url.trim());
   const canSave = name.trim() !== "" && validUrl && !saving;
@@ -123,7 +136,26 @@ export function SourceEditor({ source, onClose }: { source: Source | null; onClo
               <Fact label="AI cost" value={usd(result.llmCostUsd)} />
             </div>
             <div className="subtle diag-line">{diagLine(result)}</div>
-            {result.items.length === 0 && result.diagnostics.hint && (
+            {addable.length > 0 && result.diagnostics.hint && (
+              <div className="callout info">
+                <Icon name="info" />
+                <div>
+                  <b>Hosted job portal</b>
+                  <span>{result.diagnostics.hint}</span>
+                  {onAddPortal && addable.map((p) => (
+                    <button
+                      key={p.host}
+                      className="btn small"
+                      style={{ marginTop: 6, alignSelf: "flex-start" }}
+                      onClick={() => onAddPortal({ name: `${name.trim() || hostOf(url) || p.host} (${p.name})`, url: p.rootUrl, renderMode: "auto", enabled: true })}
+                    >
+                      <Icon name="plus" size={13} /> Add {p.host} as a source
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {result.items.length === 0 && result.diagnostics.hint && addable.length === 0 && (
               <div className="callout info"><Icon name="info" /><div><b>Why nothing was found</b><span>{result.diagnostics.hint}</span></div></div>
             )}
             {result.error && result.error !== result.diagnostics.hint && <div className="callout red"><Icon name="warn" /><div><b>Problem</b><span>{result.error}</span></div></div>}

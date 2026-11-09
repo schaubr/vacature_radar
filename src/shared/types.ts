@@ -186,6 +186,8 @@ export interface PageDiagnostics {
   linkCount: number;
   frames: { url: string; included: boolean }[];
   embeddedHosts: string[];
+  /** Known hosted job portals the page links to or embeds (empty when none). */
+  portals: { name: string; host: string; sampleUrl: string; kind: "link" | "frame" | "script"; companySpecific: boolean; rootUrl: string }[];
   llmUsed: boolean;
   hint: string | null;
 }

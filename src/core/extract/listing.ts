@@ -19,7 +19,34 @@ export interface ListingResult {
   recipe: Recipe | null;
 }
 
+const NON_VACANCY = [
+  "spontane sollicitatie",
+  "spontaan solliciteren",
+  "solliciteer spontaan",
+  "open sollicitatie",
+  "open application",
+  "spontaneous application",
+  "candidature spontanee",
+];
+
+/** True for listing entries that are only an open/spontaneous application, not a vacancy. */
+export function isNonVacancyTitle(title: string): boolean {
+  const t = title
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return NON_VACANCY.includes(t);
+}
+
+/** Runs the extraction tiers and drops non-vacancy entries (open applications) from whichever tier answered. */
 export async function extractListing(ctx: ListingContext): Promise<ListingResult> {
+  const r = await extractTiers(ctx);
+  return { ...r, items: r.items.filter((i) => !isNonVacancyTitle(i.title)) };
+}
+
+async function extractTiers(ctx: ListingContext): Promise<ListingResult> {
   const { url, html, existingRecipe } = ctx;
 
   // 1. feed

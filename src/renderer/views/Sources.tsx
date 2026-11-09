@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Source } from "../../shared/types";
+import type { Source, SourceInput } from "../../shared/types";
 import { call } from "../api";
 import { Empty, Icon, Switch, ViewHeader } from "../components/ui";
 import type { Shared } from "../App";
@@ -12,6 +12,7 @@ const STATUS_LABEL = { ok: "OK", empty: "Empty", error: "Error", never: "Not sca
 export function SourcesView({ shared }: { shared: Shared }) {
   const { sources, status } = shared;
   const [editing, setEditing] = useState<Source | "new" | null>(null);
+  const [prefill, setPrefill] = useState<Partial<SourceInput> | null>(null);
   const [confirmId, setConfirmId] = useState<number | null>(null);
 
   return (
@@ -86,7 +87,16 @@ export function SourcesView({ shared }: { shared: Shared }) {
           </table>
         )}
       </div>
-      {editing && <SourceEditor source={editing === "new" ? null : editing} onClose={() => setEditing(null)} />}
+      {editing && (
+        <SourceEditor
+          // a new key remounts the editor so a pre-filled "add portal" editor replaces the one that suggested it
+          key={prefill ? `prefill:${prefill.url}` : editing === "new" ? "new" : editing.id}
+          source={editing === "new" ? null : editing}
+          prefill={prefill ?? undefined}
+          onAddPortal={(p) => { setPrefill(p); setEditing("new"); }}
+          onClose={() => { setEditing(null); setPrefill(null); }}
+        />
+      )}
     </>
   );
 }

@@ -66,16 +66,63 @@ describe("RadarService", () => {
     expect(seedSources(store)).toBe(SEED_SOURCES.length);
     expect(seedSources(store)).toBe(0);
     const list = store.listSources();
-    expect(list).toHaveLength(6);
-    expect(list.filter((s) => s.enabled).map((s) => s.renderMode)).toEqual(["browser", "browser", "static", "static"]);
+    expect(list).toHaveLength(7);
+    expect(list.at(-1)).toMatchObject({ name: "Fiola vzw", url: "https://fiolavzw.be/vacatures/", enabled: true, renderMode: "static", strategy: "recipe" });
+    expect(list.filter((s) => s.enabled).map((s) => s.renderMode)).toEqual(["browser", "browser", "static", "static", "static"]);
     const withRecipe = list.filter((s) => s.recipe);
-    expect(withRecipe.map((s) => s.strategy)).toEqual(["recipe", "recipe", "recipe", "recipe"]);
+    expect(withRecipe.map((s) => s.strategy)).toEqual(["recipe", "recipe", "recipe", "recipe", "recipe"]);
     expect(list.filter((s) => !s.enabled).every((s) => s.recipe === null)).toBe(true);
     expect(list.filter((s) => !s.enabled).every((s) => /Use Test before enabling/.test(s.notes))).toBe(true);
     const zn = list.find((s) => s.name === "Zorgnet-Icuro")!;
     expect(zn.renderMode).toBe("browser");
     expect(zn.notes).toMatch(/embedded Jobat widget/);
     expect(list.filter((s) => !s.enabled && s !== zn).every((s) => s.renderMode === "auto")).toBe(true);
+  });
+
+  describe("seed revisions", () => {
+    const fiola = (store: Store) => store.listSources().find((s) => s.url === "https://fiolavzw.be/vacatures/");
+    /** An install made before revision 2: the six original seeds, no stored revision. */
+    const legacy = () => {
+      const { store } = setup();
+      for (const s of SEED_SOURCES.filter((x) => x.since === 1)) {
+        const { since: _since, ...input } = s;
+        store.createSource(input);
+      }
+      return store;
+    };
+
+    it("a fresh install gets all 7 seeds including Fiola and stores the revision", () => {
+      const { store } = setup();
+      expect(seedSources(store)).toBe(7);
+      expect(fiola(store)).toBeTruthy();
+      expect(store.getMeta("seedRevision")).toBe(2);
+    });
+
+    it("an existing install without a revision gains only Fiola", () => {
+      const store = legacy();
+      expect(store.getMeta("seedRevision")).toBeNull();
+      expect(seedSources(store)).toBe(1);
+      expect(store.listSources()).toHaveLength(7);
+      expect(fiola(store)).toMatchObject({ enabled: true, renderMode: "static", strategy: "recipe" });
+      expect(seedSources(store)).toBe(0);
+    });
+
+    it("a deleted Fiola is not re-added, and restarts are idempotent", () => {
+      const store = legacy();
+      seedSources(store);
+      store.deleteSource(fiola(store)!.id);
+      expect(seedSources(store)).toBe(0);
+      expect(seedSources(store)).toBe(0);
+      expect(fiola(store)).toBeUndefined();
+      expect(store.listSources()).toHaveLength(6);
+    });
+
+    it("does not duplicate a seed whose URL the owner already added (canonical compare)", () => {
+      const store = legacy();
+      store.createSource(srcInput({ name: "My Fiola", url: "https://FIOLAVZW.be/vacatures?utm_source=x" }));
+      expect(seedSources(store)).toBe(0);
+      expect(store.listSources()).toHaveLength(7);
+    });
   });
 
   it("sources CRUD emits events; update resets learned state; delete removes vacancies", async () => {

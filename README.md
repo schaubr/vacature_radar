@@ -1,6 +1,6 @@
 # Vacature Radar
 
-A personal macOS menu-bar app that watches Flemish social-sector job sites (VDAB, VVSG, Jobsolutions and any listing page you add), extracts the vacancies, and scores each one against your LinkedIn profile with Claude. New strong matches arrive as a notification. Everything runs on your Mac.
+A personal macOS menu-bar app that watches Flemish social-sector job sites (VDAB, VVSG, Jobsolutions, Fiola vzw and any listing page you add), extracts the vacancies, and scores each one against your LinkedIn profile with Claude. New strong matches arrive as a notification. Everything runs on your Mac.
 
 ## Requirements
 
@@ -62,6 +62,8 @@ Roughly $0.02 per scored vacancy with Opus 5.5 at low effort. Learning a page la
 - "No vacancies found": the page layout is unknown. Add an API key so Claude can learn it, or use Reset recipe on the source and scan again.
 - A recipe that stops working is relearned automatically (this needs the key and costs a few cents).
 - "Blocked by robots.txt": the site forbids automated access to that URL and the app will not fetch it.
+- Test explains empty results: how much text and how many links it saw, which embedded widgets or job portals the page uses, and what to try. When vacancies live on a hosted portal (for example Jobtoolz), Test offers a button to add that portal as a source.
+- Some job widgets (for example Jobat on Zorgnet-Icuro) sit behind Cloudflare bot protection. They usually work from a normal home connection; if Test still shows nothing, the hint says so.
 - Vacancies stay "pending" without a key, a profile, or budget. They are scored as soon as that is fixed.
 - Travel time missing: "unavailable" means no OpenRouteService key or home location; "could not place" means the vacancy names no recognizable town. Settings > Recompute all travel times retries everything. If the free quota is hit, travel times resume on the next scan.
 
