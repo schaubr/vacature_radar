@@ -1283,3 +1283,23 @@ jobstudent, stage, interim, freelance, flexi, b1-b3 style scales, "m/v/x"). In `
 `approximate` (region/province layer) or `not_found`, and `titleTownQuery(title)` is non-null, geocode it as an organization-style query
 (must hit locality/localadmin/borough); if it hits, use it (state `ok`, `geoQuery` = the town) instead of the approximate/not-found result.
 Cached like any other query. The scoring prompt's travel line then reflects the precise town.
+
+---
+
+## 19. Distributable package for other Macs (added 2026-11-09)
+
+Owner request: one package that contains everything and can be dropped on another Mac.
+- Facts (verified on a Linux-assembled bundle, 2026-11-09): the packaged `Vacature Radar.app` is about 330 MB and self-contained
+  (Electron framework + `app.asar`; no Node or npm needed on the target). `LSMinimumSystemVersion` 13.0 (macOS Ventura or newer).
+  The default build is arm64 (Apple Silicon) only.
+- Scripts: `"package": "npm run build && electron-builder --mac dmg zip --arm64"` and
+  `"package:universal": "npm run build && electron-builder --mac dmg zip --universal"` (runs on Intel and Apple Silicon, about double size).
+  Keep `dist:mac` as an alias of `package`. `npm start` keeps using `--dir` (the CLI flag overrides config targets).
+- Config: `build.mac.target` becomes `[{target:"dmg"},{target:"zip"}]` without arch (arch comes from the CLI flags), `artifactName`
+  `"${productName}-${version}-${arch}.${ext}"`, `dmg.contents` with the app and an `/Applications` link (standard drag-to-install window).
+  Signing stays ad-hoc (`identity: "-"`): the target Mac shows an "unverified developer" warning on first open. Ideal: Apple Developer ID
+  + notarization (99 USD/year); not worth it for personal use. DMG builds only run on macOS (hdiutil); building on Linux is unsupported.
+- README "Install on another Mac": build on the owner's Mac, copy the .dmg (USB stick, AirDrop, cloud drive), drag to Applications,
+  first launch via System Settings > Privacy & Security > Open Anyway (or `xattr -dr com.apple.quarantine "/Applications/Vacature Radar.app"`),
+  then set up keys and profile. Optional: copy `~/Library/Application Support/Vacature Radar` to the new Mac BEFORE first launch to keep
+  vacancies, profile, sources and settings; API keys must be entered again because they are encrypted with the old Mac's Keychain.
