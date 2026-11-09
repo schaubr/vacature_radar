@@ -21,6 +21,45 @@ Then drag `release/mac-arm64/Vacature Radar.app` to `/Applications`. The app car
 
 Closing the window keeps the app running in the menu bar (the ◎ icon). Scans run every 6 hours while the Mac is awake, and a missed scan is caught up after the Mac wakes. Quit from the menu bar icon. The interface language can be switched between English and Dutch with the EN | NL toggle in the sidebar and in Settings.
 
+## Install on another Mac
+
+Requirements on the other Mac: macOS 13 Ventura or newer. No Node, npm or Xcode is needed there. Build on your own Mac: Apple Silicon is enough for `npm run package` (the result runs on Apple Silicon only). For an Intel Mac, or when unsure, use `npm run package:universal` (runs on any Mac, about double the size).
+
+1. On your Mac, run:
+
+   ```bash
+   npm ci
+   ```
+
+2. Build the package (Apple Silicon only target):
+
+   ```bash
+   npm run package
+   ```
+
+   Or, for any Mac (Intel and Apple Silicon):
+
+   ```bash
+   npm run package:universal
+   ```
+
+3. Find the result in `release/`: `Vacature Radar-1.0.0-arm64.dmg` and `Vacature Radar-1.0.0-arm64.zip` (the universal build is named `Vacature Radar-1.0.0-universal.dmg` and `.zip`). The app inside is about 330 MB and fully self-contained.
+4. Copy the `.dmg` to the other Mac with a USB stick, AirDrop or a cloud drive. The `.zip` holds the same app if you prefer that.
+5. On the other Mac, open the `.dmg` and drag Vacature Radar onto the Applications link.
+6. First launch: the app is not signed with a paid Apple developer certificate, so macOS says it cannot verify the developer. Either of these gets past it:
+   - Open System Settings > Privacy & Security, scroll down, and choose Open Anyway next to the Vacature Radar message, then confirm.
+   - Or remove the quarantine flag in Terminal:
+
+   ```bash
+   xattr -dr com.apple.quarantine "/Applications/Vacature Radar.app"
+   ```
+
+7. Set up the API key and your profile as in First-time setup below.
+
+Optional, to keep your vacancies, profile, sources and settings: before the first launch on the new Mac, copy the folder `~/Library/Application Support/Vacature Radar` from the old Mac to the same place on the new one. API keys are not carried over, because they are encrypted with the old Mac's Keychain. Enter them again in Settings.
+
+The ideal route is an Apple Developer ID plus notarization (99 USD per year), which removes the warning. For personal use the one-time warning is the practical choice.
+
 ## First-time setup
 
 1. **Settings:** paste your API key and save. It is validated with a tiny request before it is stored.

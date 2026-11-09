@@ -12,7 +12,9 @@
     "start": "node scripts/start.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "dist:mac": "npm run build && electron-builder --mac --arm64",
+    "package": "npm run build && electron-builder --mac dmg zip --arm64",
+    "package:universal": "npm run build && electron-builder --mac dmg zip --universal",
+    "dist:mac": "npm run package",
     "scan-cli": "NODE_USE_ENV_PROXY=1 tsx scripts/scan-cli.ts"
   },
   "build": {
@@ -25,18 +27,34 @@
     "directories": {
       "output": "release"
     },
+    "publish": null,
     "mac": {
       "target": [
         {
-          "target": "dir",
-          "arch": [
-            "arm64"
-          ]
+          "target": "dmg"
+        },
+        {
+          "target": "zip"
         }
       ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
       "category": "public.app-category.productivity",
       "identity": "-",
       "hardenedRuntime": false
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     }
   },
   "devDependencies": {
