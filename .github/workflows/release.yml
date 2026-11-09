@@ -14,8 +14,10 @@ concurrency:
 
 jobs:
   release:
-    # Apple Silicon runner: dmg needs hdiutil and signing needs codesign, so this cannot run on Linux.
-    runs-on: macos-14
+    # macos-latest is Apple Silicon and moves with GitHub's supported images, so a retired pinned
+    # label (macos-14 was retired 2026-11-02) can't break releases again. Must be macOS: dmg needs
+    # hdiutil and signing needs codesign, so this cannot run on Linux.
+    runs-on: macos-latest
     timeout-minutes: 45
     env:
       # Ad-hoc signing only (identity "-" in package.json); stop electron-builder from searching for certificates.
