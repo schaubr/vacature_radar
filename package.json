@@ -4,10 +4,12 @@
   "private": true,
   "description": "Personal menu-bar app that monitors Flemish social-sector job sites and scores vacancies with Claude",
   "author": "Vacature Radar",
+  "productName": "Vacature Radar",
   "main": "dist/main/index.js",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "start": "npm run build && electron .",
+    "dev": "npm run build && electron .",
+    "start": "node scripts/start.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "dist:mac": "npm run build && electron-builder --mac --arm64",

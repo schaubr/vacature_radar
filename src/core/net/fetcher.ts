@@ -1,4 +1,5 @@
 import { RobotsCache } from "./robots";
+import { tEn, type Translator } from "../../shared/i18n";
 
 export interface RawResponse {
   status: number;
@@ -26,6 +27,8 @@ export interface PoliteFetcherOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   onWarn?: (message: string) => void;
+  /** Translator for error and warning texts, resolved at call time (default English). */
+  t?: Translator;
 }
 
 const HEADERS: Record<string, string> = {
@@ -42,11 +45,13 @@ export class PoliteFetcher {
   private readonly lastStart = new Map<string, number>();
   private readonly chains = new Map<string, Promise<unknown>>();
   private readonly robots: RobotsCache;
+  private readonly translator: () => Translator;
 
   constructor(
     private readonly raw: RawFetch,
     opts: PoliteFetcherOptions = {},
   ) {
+    this.translator = () => opts.t ?? tEn;
     this.minIntervalMs = opts.minIntervalMs ?? 3000;
     this.timeoutMs = opts.timeoutMs ?? 30_000;
     this.now = opts.now ?? Date.now;
@@ -56,7 +61,7 @@ export class PoliteFetcher {
         const res = await this.request(robotsUrl);
         return { status: res.status, body: res.body };
       },
-      { now: this.now, userAgent: "VacatureRadar", onWarn: opts.onWarn },
+      { now: this.now, userAgent: "VacatureRadar", onWarn: opts.onWarn, t: opts.t },
     );
   }
 
@@ -72,7 +77,7 @@ export class PoliteFetcher {
       await this.waitTurn(hostOf(url));
       return this.rawWithTimeout(url);
     });
-    if (res.status >= 400) throw new FetchError(`HTTP ${res.status} for ${url}`, res.status);
+    if (res.status >= 400) throw new FetchError(this.translator()("fetch.http", { status: res.status, url }), res.status);
     return res;
   }
 
@@ -96,15 +101,15 @@ export class PoliteFetcher {
       timer = setTimeout(() => {
         timedOut = true;
         ctrl.abort();
-        reject(new FetchError(`Timeout after ${this.timeoutMs} ms for ${url}`, null));
+        reject(new FetchError(this.translator()("fetch.timeout", { ms: this.timeoutMs, url }), null));
       }, this.timeoutMs);
     });
     try {
       return await Promise.race([this.raw(url, { headers: { ...HEADERS }, signal: ctrl.signal }), timeout]);
     } catch (e) {
       if (e instanceof FetchError) throw e;
-      if (timedOut) throw new FetchError(`Timeout after ${this.timeoutMs} ms for ${url}`, null);
-      throw new FetchError(`Network error for ${url}: ${e instanceof Error ? e.message : String(e)}`, null);
+      if (timedOut) throw new FetchError(this.translator()("fetch.timeout", { ms: this.timeoutMs, url }), null);
+      throw new FetchError(this.translator()("fetch.network", { url, error: e instanceof Error ? e.message : String(e) }), null);
     } finally {
       if (timer) clearTimeout(timer);
     }

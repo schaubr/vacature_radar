@@ -41,6 +41,16 @@ export const FIOLA_RECIPE: Recipe = {
   nextPageSelector: "",
 };
 
+export const SOCIUS_RECIPE: Recipe = {
+  itemSelector: "table.vacature-lijst tbody.wpv-loop > tr",
+  titleSelector: "td:nth-child(1) a",
+  linkSelector: "td:nth-child(1) a",
+  organizationSelector: "td:nth-child(2)",
+  locationSelector: "td:nth-child(3)",
+  dateSelector: "td:nth-child(4)",
+  nextPageSelector: "li.wpv_page_current + li a",
+};
+
 const UNTESTED = "Seeded 2026-11-08. Use Test before enabling.";
 
 /** A seed entry; `since` is the seed revision that introduced it (see DESIGN.md 16.1). */
@@ -64,6 +74,11 @@ export const SEED_SOURCES: SeedSource[] = [
     ...src("Fiola vzw", "https://fiolavzw.be/vacatures/", "static", true, 2),
     notes: "Vacancy list on fiolavzw.be, detail pages on Jobtoolz (fiola-vzw.jobtoolz.com). Verified 2026-11-09.",
   },
+  {
+    ...src("Socius (sociaal-cultureel werk)", "https://socius.be/vacature/", "static", true, 3),
+    maxPages: 3,
+    notes: "Vacaturebank van Socius. 3 pages, about 45 vacancies. Verified 2026-11-09.",
+  },
 ];
 
 const SEED_RECIPES: Record<string, Recipe> = {
@@ -72,6 +87,7 @@ const SEED_RECIPES: Record<string, Recipe> = {
   "VVSG (lokale besturen)": VVSG_RECIPE,
   Jobsolutions: JOBSOLUTIONS_RECIPE,
   "Fiola vzw": FIOLA_RECIPE,
+  "Socius (sociaal-cultureel werk)": SOCIUS_RECIPE,
 };
 
 /**

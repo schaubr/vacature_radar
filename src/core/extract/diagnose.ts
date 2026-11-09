@@ -3,6 +3,7 @@ import type { PageDiagnostics } from "../../shared/types";
 import { NON_CONTENT_FRAME_HOSTS, matchesHostList } from "../net/render";
 import { visibleTextLength } from "./html";
 import { findPortals, type FoundPortal } from "./portals";
+import { tEn, type Translator } from "../../shared/i18n";
 
 /** Extra hosts that are libraries/CDNs, not content providers (on top of the non-content frame hosts). */
 const CDN_HOSTS = [
@@ -17,7 +18,8 @@ const CDN_HOSTS = [
   "polyfill.io",
 ];
 
-export const NO_KEY_HINT = "No vacancies found. Add an Anthropic API key so Claude can learn this page's layout.";
+/** English text of the generic no-key hint; compare with `t("diag.noKey")` for other languages. */
+export const NO_KEY_HINT = tEn("diag.noKey");
 
 export interface DiagnoseInput {
   html: string;
@@ -29,6 +31,8 @@ export interface DiagnoseInput {
   /** Extracted item URLs; lets the portal rule see when every item is on the page's own host. */
   itemUrls?: string[];
   llmAvailable: boolean;
+  /** Translator for the hint (default English). */
+  t?: Translator;
 }
 
 function hostOf(u: string, base?: string): string | null {
@@ -39,12 +43,13 @@ function hostOf(u: string, base?: string): string | null {
   }
 }
 
-function portalHint(p: FoundPortal): string {
-  return `Vacancies on this page are hosted on ${p.name} (${p.host}). For the most reliable results, add ${p.rootUrl} as a source.`;
+function portalHint(p: FoundPortal, t: Translator): string {
+  return t("diag.portal", { name: p.name, host: p.host, url: p.rootUrl });
 }
 
 /** Facts about a fetched page and, when it yielded no items, a plain-language reason. Pure. */
 export function diagnosePage(input: DiagnoseInput): PageDiagnostics {
+  const t = input.t ?? tEn;
   const $ = load(input.html);
   const linkCount = $("a[href]").length;
   const visibleTextChars = visibleTextLength(input.html);
@@ -72,26 +77,23 @@ export function diagnosePage(input: DiagnoseInput): PageDiagnostics {
   const addable = portals.find((p) => p.companySpecific && p.kind !== "script");
   const scripted = portals.find((p) => p.kind !== "link");
   if (addable && allOwnHost) {
-    hint = portalHint(addable);
+    hint = portalHint(addable, t);
   } else if (input.itemCount === 0) {
     const list = embeddedHosts.join(", ");
     if (visibleTextChars < 300) {
-      hint = "The page is almost empty for an automated visitor. Try Browser mode; the site may also block automated access.";
+      hint = t("diag.almostEmpty");
     } else if (addable) {
-      hint = portalHint(addable);
+      hint = portalHint(addable, t);
     } else if (scripted) {
-      hint =
-        input.modeUsed === "static"
-          ? `This page loads its vacancies from ${scripted.name} with a script. Use Browser mode; the app then captures the widget's content.`
-          : `This page loads its vacancies from ${scripted.name} with a script, but nothing was captured. The widget may require interaction or block automated visitors.`;
+      hint = input.modeUsed === "static" ? t("diag.scriptStatic", { name: scripted.name }) : t("diag.scriptBrowser", { name: scripted.name });
     } else if (embeddedHosts.length > 0 && input.modeUsed === "static") {
-      hint = `This page loads content from ${list}. Switch the source to Browser mode so that content is included.`;
+      hint = t("diag.embeddedStatic", { list });
     } else if (embeddedHosts.length > 0) {
-      hint = `Vacancies may come from an embedded service (${list}). If they are still missing, add that service's own listing page as a source.`;
+      hint = t("diag.embeddedBrowser", { list });
     } else if (!input.llmAvailable) {
-      hint = NO_KEY_HINT;
+      hint = t("diag.noKey");
     } else if (input.llmUsed) {
-      hint = "Claude looked at the page and found no individual vacancies on it.";
+      hint = t("diag.llmFound");
     }
   }
 

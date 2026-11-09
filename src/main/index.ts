@@ -1,11 +1,13 @@
 // Per-run isolation (E2E tests): must happen before anything touches userData.
-import { app, BrowserWindow, dialog, Notification, powerMonitor, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, Notification, powerMonitor, shell } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 
-app.setName("Vacature Radar");
-if (process.env.VACATURE_RADAR_USER_DATA) app.setPath("userData", process.env.VACATURE_RADAR_USER_DATA);
+app.setName(APP_NAME);
+const userDataOverride = process.env.VACATURE_RADAR_USER_DATA;
+if (userDataOverride) app.setPath("userData", userDataOverride);
 
+import { APP_NAME } from "../shared/app";
 import type { RadarEvents } from "../shared/ipc";
 import { Store } from "../core/db/store";
 import { AnthropicLlmClient } from "../core/llm/client";
@@ -21,6 +23,8 @@ import { electronJsonHttp, electronRawFetch } from "./electron-fetch";
 import { ElectronRenderer } from "./electron-render";
 import { registerIpc } from "./ipc";
 import { SafeStorageSecrets } from "./secrets";
+import { buildAppMenu } from "./menu";
+import { translatorFor, type MessageKey } from "../shared/i18n";
 import { createTray, type TrayHandle } from "./tray";
 
 const isMac = process.platform === "darwin";
@@ -63,6 +67,7 @@ function createWindow(opts: { show?: boolean } = {}): void {
     minWidth: 900,
     minHeight: 600,
     show: false,
+    title: APP_NAME,
     titleBarStyle: isMac ? "hiddenInset" : "default",
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
@@ -104,16 +109,23 @@ function applyLaunchAtLogin(enabled: boolean): void {
 
 function start(): void {
   const userData = app.getPath("userData");
+  console.log(`[${APP_NAME}] app name: ${app.getName()}, userData: ${userData}`);
   fs.mkdirSync(userData, { recursive: true });
+  app.setAboutPanelOptions({ applicationName: APP_NAME, applicationVersion: app.getVersion() });
   const db = new Store(path.join(userData, "radar.db"));
   store = db;
+  // Every user-visible main-process text goes through t(), bound to the current language at call time.
+  const t = translatorFor(() => db.getSettings().outputLanguage);
+  const applyMenu = (): void => Menu.setApplicationMenu(buildAppMenu((key) => t(key as MessageKey)));
+  applyMenu();
   seedSources(db);
 
   const secrets = new SafeStorageSecrets(userData);
   const orsSecrets = new SafeStorageSecrets(userData, "ors-secret.bin");
-  const fetcher = new PoliteFetcher(electronRawFetch, { onWarn: (m) => db.log("warn", m) });
-  const renderer = new ElectronRenderer();
+  const fetcher = new PoliteFetcher(electronRawFetch, { onWarn: (m) => db.log("warn", m), t });
+  const renderer = new ElectronRenderer(t);
   const llm = new AnthropicLlmClient({
+    t,
     getApiKey: () => secrets.get(),
     budget: {
       monthUsd: () => db.monthUsageUsd(new Date()),
@@ -149,13 +161,14 @@ function start(): void {
   };
 
   const now = () => new Date();
-  const ors = new OrsClient({ http: electronJsonHttp, getKey: () => orsSecrets.get() });
+  const ors = new OrsClient({ http: electronJsonHttp, getKey: () => orsSecrets.get(), t });
   const travel = new TravelService({
     store: db,
     ors,
     orsConfigured: () => orsSecrets.get() !== null,
     now,
     log: (level, message) => db.log(level, message),
+    t,
   });
   const scanner = new ScanService({
     store: db,
@@ -167,6 +180,7 @@ function start(): void {
     emit,
     llmConfigured: () => secrets.get() !== null,
     travel,
+    t,
   });
   const scheduler = new Scheduler({ store: db, scanner, now });
   const service = new RadarService({
@@ -184,9 +198,9 @@ function start(): void {
       },
       pickImportFile: async () => {
         const opts = {
-          title: "Import LinkedIn profile",
+          title: t("dialog.import.title"),
           properties: ["openFile" as const],
-          filters: [{ name: "LinkedIn export (.zip) or profile PDF", extensions: ["zip", "pdf"] }],
+          filters: [{ name: t("dialog.import.filter"), extensions: ["zip", "pdf"] }],
         };
         const r = mainWindow && !mainWindow.isDestroyed() ? await dialog.showOpenDialog(mainWindow, opts) : await dialog.showOpenDialog(opts);
         if (r.canceled || r.filePaths.length === 0) return null;
@@ -198,7 +212,12 @@ function start(): void {
     emit,
     onSettingsChanged: (s, patch) => {
       if (patch.launchAtLogin !== undefined) applyLaunchAtLogin(s.launchAtLogin);
+      if (patch.outputLanguage !== undefined) {
+        applyMenu();
+        tray?.refresh();
+      }
     },
+    t,
   });
 
   registerIpc(service, (method, e) => {
@@ -217,6 +236,7 @@ function start(): void {
       onOpen: showWindow,
       onScanNow: () => service["scan.now"](null),
       onQuit: () => app.quit(),
+      t,
     });
   } catch (e) {
     logError(`Tray unavailable: ${e instanceof Error ? e.message : String(e)}`);
@@ -258,7 +278,7 @@ if (!app.requestSingleInstanceLock()) {
     .then(start)
     .catch((e) => {
       logError(`Startup failed: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
-      dialog.showErrorBox("Vacature Radar", `Startup failed: ${e instanceof Error ? e.message : String(e)}`);
+      dialog.showErrorBox(APP_NAME, `Startup failed: ${e instanceof Error ? e.message : String(e)}`);
       app.quit();
     });
 }

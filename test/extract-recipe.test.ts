@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyRecipe, findNextPage, recipeLooksHealthy } from "../src/core/extract/recipe";
 import type { Recipe } from "../src/shared/types";
-import { fixture, JOBSOLUTIONS_RECIPE, JOBSOLUTIONS_URL, VDAB_RECIPE, VDAB_URL, VVSG_RECIPE, VVSG_URL } from "./helpers";
+import { fixture, SOCIUS_RECIPE, JOBSOLUTIONS_RECIPE, JOBSOLUTIONS_URL, VDAB_RECIPE, VDAB_URL, VVSG_RECIPE, VVSG_URL } from "./helpers";
 
 describe("applyRecipe on fixtures", () => {
   it("vdab_list: 15 healthy items with canonical absolute urls", () => {
@@ -114,5 +114,28 @@ describe("recipeLooksHealthy", () => {
     expect(
       recipeLooksHealthy([it1("Good one", "u1"), it1("Good two", "u2"), it1("Good three", "u3"), it1("x", "u4"), it1("y", "u5")]),
     ).toBe(true); // exactly 60%
+  });
+});
+
+describe("Socius fixtures", () => {
+  const URL1 = "https://socius.be/vacature/";
+  it("page 1: 15 healthy items and a link to page 2", () => {
+    const html = fixture("socius_list.html");
+    const items = applyRecipe(html, URL1, SOCIUS_RECIPE);
+    expect(items).toHaveLength(15);
+    expect(recipeLooksHealthy(items)).toBe(true);
+    expect(items[0].title).toBe("COMMUNICATIEVERANTWOORDELIJKE (V/X/M) – Deeltijds (4/5de)");
+    expect(items[0].organization).toBe("DIOGENES");
+    expect(items[0].location).toBe("Brussel");
+    expect(items.every((i) => i.url.startsWith("https://socius.be/"))).toBe(true);
+    expect(findNextPage(html, URL1, SOCIUS_RECIPE)).toBe("https://socius.be/vacature/?wpv_view_count=31917-TCPID65678&wpv_paged=2");
+  });
+  it("page 2: 15 items and a link to page 3", () => {
+    const html = fixture("socius_list_page2.html");
+    const next = findNextPage(html, "https://socius.be/vacature/?wpv_view_count=31917-TCPID65678&wpv_paged=2", SOCIUS_RECIPE);
+    const items = applyRecipe(html, URL1, SOCIUS_RECIPE);
+    expect(items).toHaveLength(15);
+    expect(items[0].organization).toBe("De Ambrassade / Vlaamse Jeugdraad");
+    expect(next).toBe("https://socius.be/vacature/?wpv_view_count=31917-TCPID65678&wpv_paged=3");
   });
 });

@@ -19,6 +19,7 @@ import { linkedinPdfToMarkdown } from "./profile/linkedin-pdf";
 import { linkedinZipToMarkdown } from "./profile/linkedin-zip";
 import type { ScanService } from "./scan/scanner";
 import type { Scheduler } from "./scan/scheduler";
+import { tEn, type Translator } from "../shared/i18n";
 
 export interface SecretsPort {
   get(): string | null;
@@ -26,6 +27,8 @@ export interface SecretsPort {
   clear(): void;
   /** Optional: false when secure storage cannot be used on this system. */
   available?(): boolean;
+  /** Optional: true when a stored key exists but could not be decrypted (e.g. after the app rename). */
+  needsReentry?(): boolean;
 }
 
 export interface ShellPort {
@@ -53,13 +56,15 @@ export interface ServiceDeps {
   /** Resolves when the ORS key is valid, throws otherwise. Default: geocode "Gent" through `orsHttp`. */
   validateOrsKey?: (key: string) => Promise<void>;
   orsHttp?: JsonHttp;
+  /** Translator for user-facing messages, resolved at call time (default English). */
+  t?: Translator;
 }
 
-export async function defaultValidateKey(key: string): Promise<void> {
+export async function defaultValidateKey(key: string, t: Translator = tEn): Promise<void> {
   try {
     await new Anthropic({ apiKey: key, maxRetries: 1, timeout: 20_000 }).models.list({ limit: 1 });
   } catch (e) {
-    if (e instanceof Anthropic.AuthenticationError) throw new Error("Invalid API key");
+    if (e instanceof Anthropic.AuthenticationError) throw new Error(t("service.invalidApiKey"));
     throw e;
   }
 }
@@ -69,25 +74,28 @@ function maskKey(key: string): string {
   return `${key.slice(0, 7)}…${key.slice(-4)}`;
 }
 
-const SECURE_STORAGE_ERROR = "Secure storage is not available on this system";
 
 export class RadarService implements RadarApi {
+  private get t(): Translator {
+    return this.d.t ?? tEn;
+  }
+
   private readonly validateKey: (key: string) => Promise<void>;
   private readonly validateOrsKey: (key: string) => Promise<void>;
 
   private async defaultValidateOrsKey(key: string): Promise<void> {
-    if (!this.d.orsHttp) throw new Error("OpenRouteService is not available");
-    const client = new OrsClient({ http: this.d.orsHttp, getKey: () => key, minIntervalMs: 0 });
+    if (!this.d.orsHttp) throw new Error(this.t("service.orsUnavailable"));
+    const client = new OrsClient({ http: this.d.orsHttp, getKey: () => key, minIntervalMs: 0, t: this.t });
     try {
       await client.geocode("Gent");
     } catch (e) {
-      if (e instanceof OrsError && e.kind === "auth") throw new Error("Invalid OpenRouteService API key");
+      if (e instanceof OrsError && e.kind === "auth") throw new Error(this.t("service.invalidOrsKey"));
       throw e;
     }
   }
 
   constructor(private readonly d: ServiceDeps) {
-    this.validateKey = d.validateKey ?? defaultValidateKey;
+    this.validateKey = d.validateKey ?? ((k) => defaultValidateKey(k, this.t));
     this.validateOrsKey = d.validateOrsKey ?? ((k) => this.defaultValidateOrsKey(k));
     d.scanner.setStatusListener(() => this.emitStatus());
   }
@@ -147,7 +155,7 @@ export class RadarService implements RadarApi {
 
   "sources.update"(id: number, patch: Partial<SourceInput>): Source {
     const before = this.d.store.getSource(id);
-    if (!before) throw new Error("Source not found");
+    if (!before) throw new Error(this.t("service.sourceNotFound"));
     let s = this.d.store.updateSource(id, patch);
     if (patch.url !== undefined && patch.url !== before.url) {
       // A different page: everything learned about the old one is void.
@@ -270,18 +278,18 @@ export class RadarService implements RadarApi {
     let markdown: string;
     let importedFrom: Profile["importedFrom"];
     if (lower.endsWith(".zip")) {
-      markdown = linkedinZipToMarkdown(file.data);
+      markdown = linkedinZipToMarkdown(file.data, this.t);
       importedFrom = "linkedin_zip";
     } else if (lower.endsWith(".pdf")) {
       if (!this.d.llm || this.d.secrets.get() === null) {
-        throw new Error("Importing a PDF needs an Anthropic API key. Add one in Settings first.");
+        throw new Error(this.t("service.pdfNeedsKey"));
       }
       markdown = await linkedinPdfToMarkdown(this.d.llm, this.d.store.getSettings(), file.data);
       importedFrom = "linkedin_pdf";
     } else {
-      throw new Error("Unsupported file type. Choose the LinkedIn data export (.zip) or a profile PDF.");
+      throw new Error(this.t("service.unsupportedFile"));
     }
-    if (!markdown.trim()) throw new Error("The file did not contain any profile text");
+    if (!markdown.trim()) throw new Error(this.t("service.emptyImport"));
     const before = this.d.store.getProfile();
     const p = this.d.store.saveProfile({
       markdown,
@@ -306,22 +314,22 @@ export class RadarService implements RadarApi {
     try {
       this.d.onSettingsChanged?.(merged, patch);
     } catch (e) {
-      this.d.store.log("warn", `Applying settings failed: ${e instanceof Error ? e.message : String(e)}`);
+      this.d.store.log("warn", this.t("service.settingsFailed", { error: e instanceof Error ? e.message : String(e) }));
     }
     this.emitStatus();
     if (patch.monthlyBudgetUsd !== undefined && merged.monthlyBudgetUsd > before.monthlyBudgetUsd) this.rescoreSoon();
     return merged;
   }
 
-  "apiKey.status"(): { configured: boolean; masked: string | null } {
+  "apiKey.status"(): { configured: boolean; masked: string | null; needsReentry?: boolean } {
     const k = this.d.secrets.get();
-    return { configured: k !== null, masked: k ? maskKey(k) : null };
+    return { configured: k !== null, masked: k ? maskKey(k) : null, ...(k === null && this.d.secrets.needsReentry?.() ? { needsReentry: true } : {}) };
   }
 
   async "apiKey.set"(key: string): Promise<{ ok: boolean; error: string | null }> {
     const trimmed = key.trim();
-    if (!trimmed) return { ok: false, error: "Enter an API key" };
-    if (this.d.secrets.available && !this.d.secrets.available()) return { ok: false, error: SECURE_STORAGE_ERROR };
+    if (!trimmed) return { ok: false, error: this.t("service.enterKey") };
+    if (this.d.secrets.available && !this.d.secrets.available()) return { ok: false, error: this.t("service.secureStorage") };
     try {
       await this.validateKey(trimmed);
     } catch (e) {
@@ -330,7 +338,7 @@ export class RadarService implements RadarApi {
     try {
       this.d.secrets.set(trimmed);
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : SECURE_STORAGE_ERROR };
+      return { ok: false, error: e instanceof Error ? e.message : this.t("service.secureStorage") };
     }
     this.emitStatus();
     this.rescoreSoon();
@@ -344,17 +352,17 @@ export class RadarService implements RadarApi {
 
   // ---------- travel ----------
 
-  "orsKey.status"(): { configured: boolean; masked: string | null } {
+  "orsKey.status"(): { configured: boolean; masked: string | null; needsReentry?: boolean } {
     const k = this.d.orsSecrets?.get() ?? null;
-    return { configured: k !== null, masked: k ? maskKey(k) : null };
+    return { configured: k !== null, masked: k ? maskKey(k) : null, ...(k === null && this.d.orsSecrets?.needsReentry?.() ? { needsReentry: true } : {}) };
   }
 
   async "orsKey.set"(key: string): Promise<{ ok: boolean; error: string | null }> {
     const secrets = this.d.orsSecrets;
     const trimmed = key.trim();
-    if (!trimmed) return { ok: false, error: "Enter an API key" };
-    if (!secrets) return { ok: false, error: "OpenRouteService is not available" };
-    if (secrets.available && !secrets.available()) return { ok: false, error: SECURE_STORAGE_ERROR };
+    if (!trimmed) return { ok: false, error: this.t("service.enterKey") };
+    if (!secrets) return { ok: false, error: this.t("service.orsUnavailable") };
+    if (secrets.available && !secrets.available()) return { ok: false, error: this.t("service.secureStorage") };
     try {
       await this.validateOrsKey(trimmed);
     } catch (e) {
@@ -363,7 +371,7 @@ export class RadarService implements RadarApi {
     try {
       secrets.set(trimmed);
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : SECURE_STORAGE_ERROR };
+      return { ok: false, error: e instanceof Error ? e.message : this.t("service.secureStorage") };
     }
     this.emitStatus();
     void this.recomputeTravel().catch(() => undefined);

@@ -37,10 +37,10 @@ export interface RadarApi {
   "profile.import"(): Promise<Profile | null>; // main shows file dialog (.zip or .pdf); null if cancelled
   "settings.get"(): Settings;
   "settings.save"(patch: Partial<Settings>): Settings;
-  "apiKey.status"(): { configured: boolean; masked: string | null };
+  "apiKey.status"(): { configured: boolean; masked: string | null; needsReentry?: boolean };
   "apiKey.set"(key: string): Promise<{ ok: boolean; error: string | null }>; // validates with a tiny models.list call
   "apiKey.clear"(): void;
-  "orsKey.status"(): { configured: boolean; masked: string | null };
+  "orsKey.status"(): { configured: boolean; masked: string | null; needsReentry?: boolean };
   "orsKey.set"(key: string): Promise<{ ok: boolean; error: string | null }>; // validates by geocoding "Gent"
   "orsKey.clear"(): void;
   "travel.recompute"(): Promise<{ updated: number; failed: number }>;

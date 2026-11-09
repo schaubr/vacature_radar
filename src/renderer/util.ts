@@ -1,38 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Bucket, ModelId, VacancyListItem } from "../shared/types";
-
-export function relativeTime(iso: string | null | undefined, now = Date.now()): string {
-  if (!iso) return "never";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  const s = Math.round((now - t) / 1000);
-  if (s < 0) {
-    const f = -s;
-    if (f < 3600) return `in ${Math.max(1, Math.round(f / 60))} min`;
-    if (f < 86400) return `in ${Math.round(f / 3600)} h`;
-    return `in ${Math.round(f / 86400)} d`;
-  }
-  if (s < 45) return "just now";
-  if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min ago`;
-  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-  if (s < 86400 * 14) return `${Math.round(s / 86400)} d ago`;
-  return new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-}
-
-export function clockTime(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-}
-
-export function dateTime(iso: string): string {
-  const d = new Date(iso);
-  return (
-    d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) +
-    " " +
-    d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-  );
-}
+import type { Bucket } from "../shared/types";
 
 export function hostOf(url: string): string {
   try {
@@ -41,31 +8,6 @@ export function hostOf(url: string): string {
     return url;
   }
 }
-
-export function usd(n: number): string {
-  return "$" + n.toFixed(n < 0.1 ? 3 : 2);
-}
-
-export const BUCKET_LABEL: Record<Bucket, string> = {
-  strong: "Strong",
-  possible: "Possible",
-  weak: "Weak",
-  knockout: "Knockout",
-};
-
-export const STATE_LABEL: Record<VacancyListItem["scoreState"], string> = {
-  scored: "Scored",
-  pending: "Pending",
-  filtered: "Filtered",
-  error: "Error",
-  skipped: "Skipped",
-};
-
-export const MODEL_PRICE: Record<ModelId, string> = {
-  "claude-opus-5-5": "$4 in / $20 out per M tokens",
-  "claude-sonnet-5-5": "$2 in / $10 out per M tokens",
-  "claude-haiku-5-5": "$0.10 in / $0.50 out per M tokens",
-};
 
 export function scoreTone(n: number): Bucket {
   return n >= 70 ? "strong" : n >= 50 ? "possible" : "weak";

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AppStatus, Source, VacancyCounts } from "../shared/types";
 import { call, onRadar } from "./api";
-import { Icon } from "./components/ui";
-import { clockTime } from "./util";
+import { Icon, Segmented } from "./components/ui";
+import { useT } from "./i18n";
+import { APP_NAME } from "../shared/app";
+import type { Lang, MessageKey } from "../shared/i18n";
 import { Inbox } from "./views/Inbox";
 import { SourcesView } from "./views/Sources";
 import { ProfileView } from "./views/Profile";
@@ -11,12 +13,12 @@ import { ActivityView } from "./views/Activity";
 
 export type ViewId = "inbox" | "sources" | "profile" | "settings" | "activity";
 
-const NAV: { id: ViewId; label: string; icon: string }[] = [
-  { id: "inbox", label: "Inbox", icon: "inbox" },
-  { id: "sources", label: "Sources", icon: "sources" },
-  { id: "profile", label: "Profile", icon: "profile" },
-  { id: "settings", label: "Settings", icon: "settings" },
-  { id: "activity", label: "Activity", icon: "activity" },
+const NAV: { id: ViewId; label: MessageKey; icon: string }[] = [
+  { id: "inbox", label: "nav.inbox", icon: "inbox" },
+  { id: "sources", label: "nav.sources", icon: "sources" },
+  { id: "profile", label: "nav.profile", icon: "profile" },
+  { id: "settings", label: "nav.settings", icon: "settings" },
+  { id: "activity", label: "nav.activity", icon: "activity" },
 ];
 
 const EMPTY_STATUS: AppStatus = {
@@ -39,6 +41,7 @@ export interface Shared {
 }
 
 export function App() {
+  const { t, lang, setLang, fmt } = useT();
   const [view, setView] = useState<ViewId>("inbox");
   const [status, setStatus] = useState<AppStatus>(EMPTY_STATUS);
   const [sources, setSources] = useState<Source[]>([]);
@@ -90,29 +93,30 @@ export function App() {
   const errorSources = sources.filter((s) => s.enabled && s.lastStatus === "error").length;
   const badge = (id: ViewId): { text: string; tone?: string } | null => {
     if (id === "inbox" && counts && counts.new > 0) return { text: String(counts.new), tone: "accent" };
-    if (id === "sources" && sources.length) return errorSources ? { text: `${errorSources} issue${errorSources > 1 ? "s" : ""}`, tone: "red" } : { text: String(sources.length) };
-    if (id === "profile" && !status.profileReady) return { text: "set up", tone: "amber" };
-    if (id === "settings" && !status.apiKeyConfigured) return { text: "API key", tone: "amber" };
+    if (id === "sources" && sources.length) return errorSources ? { text: t("nav.badge.issues", { count: errorSources }), tone: "red" } : { text: String(sources.length) };
+    if (id === "profile" && !status.profileReady) return { text: t("nav.badge.setUp"), tone: "amber" };
+    if (id === "settings" && !status.apiKeyConfigured) return { text: t("nav.badge.apiKey"), tone: "amber" };
     return null;
   };
 
   const current = sources.find((s) => s.id === status.currentSourceId);
-  let statusLine = "Idle";
-  if (status.scanning) statusLine = `Scanning ${current ? current.name : "…"}${status.queueLength > 0 ? ` (+${status.queueLength} queued)` : ""}`;
-  else if (status.budgetExceeded) statusLine = "Monthly budget reached";
-  else if (status.nextScanAt) statusLine = `Next scan ${clockTime(status.nextScanAt)}`;
+  let statusLine = t("status.idle");
+  if (status.scanning) statusLine = (current ? t("status.scanningSource", { name: current.name }) : t("status.scanning")) + (status.queueLength > 0 ? ` ${t("status.queued", { count: status.queueLength })}` : "");
+  else if (status.budgetExceeded) statusLine = t("status.budgetReached");
+  else if (status.nextScanAt) statusLine = t("status.nextScan", { time: fmt.time(status.nextScanAt) });
 
   return (
     <div className="app">
       <aside className="sidebar">
         <div className="drag-strip" />
-        <nav aria-label="Main">
+        <div className="wordmark">{APP_NAME}</div>
+        <nav aria-label={t("nav.main")}>
           {NAV.map((n) => {
             const b = badge(n.id);
             return (
               <button key={n.id} className={`nav-item${view === n.id ? " active" : ""}`} aria-current={view === n.id ? "page" : undefined} onClick={() => setView(n.id)}>
                 <Icon name={n.icon} />
-                <span className="nav-label">{n.label}</span>
+                <span className="nav-label">{t(n.label)}</span>
                 {b && <span className={`nav-badge ${b.tone ?? ""}`}>{b.text}</span>}
               </button>
             );
@@ -123,9 +127,18 @@ export function App() {
             <span className={`dot ${status.scanning ? "busy" : status.budgetExceeded ? "red" : "idle"}`} />
             <span className="status-text">{statusLine}</span>
           </div>
+          <Segmented<Lang>
+            label={t("lang.label")}
+            value={lang}
+            onChange={setLang}
+            options={[
+              { id: "en", label: t("lang.short.en") },
+              { id: "nl", label: t("lang.short.nl") },
+            ]}
+          />
           <button className="btn block" disabled={status.scanning} onClick={() => call("scan.now", null)}>
             <Icon name="refresh" size={14} />
-            {status.scanning ? "Scanning…" : "Scan all now"}
+            {status.scanning ? t("status.scanning") : t("action.scanAll")}
           </button>
         </div>
       </aside>

@@ -2,6 +2,7 @@ import type { Store, VacancyRow } from "../db/store";
 import { normalizeGeoQuery } from "../db/store";
 import { classifyHit, locationQuery } from "./locate";
 import { OrsError, type GeoHit, type OrsClient } from "./ors";
+import { tEn, type Translator } from "../../shared/i18n";
 
 export interface TravelDeps {
   store: Store;
@@ -9,6 +10,8 @@ export interface TravelDeps {
   orsConfigured: () => boolean;
   now?: () => Date;
   log?: (level: "info" | "warn" | "error", message: string) => void;
+  /** Translator for log lines and stored error texts, resolved at call time (default English). */
+  t?: Translator;
 }
 
 export interface TravelResult {
@@ -24,6 +27,10 @@ export class TravelService {
   private chain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly d: TravelDeps) {}
+
+  private get t(): Translator {
+    return this.d.t ?? tEn;
+  }
 
   private log(level: "info" | "warn" | "error", msg: string): void {
     try {
@@ -81,13 +88,13 @@ export class TravelService {
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        this.log("warn", `Home location lookup failed: ${msg}`);
+        this.log("warn", this.t("geo.homeLookupFailed", { error: msg }));
         store.setHomeGeo({ query: "", error: msg });
         return e instanceof OrsError ? "error" : "none";
       }
     }
     if (!hit || classifyHit(hit, false) === "not_found") {
-      store.setHomeGeo({ query, error: `Could not find "${store.getProfile().preferences.homeLocation.trim()}" in Belgium` });
+      store.setHomeGeo({ query, error: this.t("geo.homeNotFound", { query: store.getProfile().preferences.homeLocation.trim() }) });
       return "none";
     }
     store.setHomeGeo({ query, label: hit.label, lat: hit.lat, lon: hit.lon });
@@ -127,7 +134,7 @@ export class TravelService {
       if (!(await this.geocodeRows(ids, result))) return result;
       await this.matrixRows(ids, store.getHomeQuery(), profile.homeGeo, result);
     } catch (e) {
-      this.log("error", `Travel computation failed: ${e instanceof Error ? e.message : String(e)}`);
+      this.log("error", this.t("geo.computeFailed", { error: e instanceof Error ? e.message : String(e) }));
     }
     return result;
   }
@@ -142,7 +149,7 @@ export class TravelService {
         const q = locationQuery(row);
         if (!q) {
           store.saveVacancyGeo(row.id, {
-            query: "", label: "", lat: null, lon: null, state: "not_found", error: "No place could be derived",
+            query: "", label: "", lat: null, lon: null, state: "not_found", error: this.t("geo.noPlace"),
           });
           continue;
         }
@@ -158,7 +165,7 @@ export class TravelService {
             hit = await ors.geocode(q.query);
           } catch (e) {
             if (e instanceof OrsError && e.kind !== "bad_response") {
-              this.log("warn", `Travel lookup stopped: ${e.message}. Vacancies stay pending until the next scan.`);
+              this.log("warn", this.t("geo.lookupStopped", { error: e.message }));
               return false;
             }
             const msg = e instanceof Error ? e.message : String(e);
@@ -180,7 +187,7 @@ export class TravelService {
         const cls = classifyHit(hit, q.fromOrganization);
         if (!hit || cls === "not_found") {
           store.saveVacancyGeo(row.id, {
-            query: q.query, label: "", lat: null, lon: null, state: "not_found", error: `Could not place "${q.query}"`,
+            query: q.query, label: "", lat: null, lon: null, state: "not_found", error: this.t("geo.couldNotPlace", { query: q.query }),
           });
         } else {
           store.saveVacancyGeo(row.id, {
@@ -207,7 +214,7 @@ export class TravelService {
         rows.map((r) => ({ lat: r.geoLat!, lon: r.geoLon! })),
       );
     } catch (e) {
-      this.log("warn", `Travel time lookup stopped: ${e instanceof Error ? e.message : String(e)}`);
+      this.log("warn", this.t("geo.timeLookupStopped", { error: e instanceof Error ? e.message : String(e) }));
       return;
     }
     rows.forEach((row, i) => {
@@ -218,7 +225,7 @@ export class TravelService {
       } else {
         store.saveVacancyGeo(row.id, {
           query: row.geoQuery, label: row.geoLabel, lat: row.geoLat, lon: row.geoLon,
-          state: "error", error: "No driving route found",
+          state: "error", error: this.t("geo.noRoute"),
         });
         result.failed++;
       }

@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { tEn, type Translator } from "../../shared/i18n";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { z } from "zod";
 import type { Effort, LlmPurpose, ModelId } from "../../shared/types";
@@ -66,6 +67,8 @@ export interface AnthropicLlmClientOptions {
   anthropicFactory?: (apiKey: string) => Anthropic;
   /** Test hook for the rate-limit wait. */
   sleep?: (ms: number) => Promise<void>;
+  /** Translator for user-facing errors, resolved at call time (default English). */
+  t?: Translator;
 }
 
 interface RawParams {
@@ -92,6 +95,10 @@ interface BetaResponse {
 export class AnthropicLlmClient implements LlmClient {
   private clients = new Map<string, Anthropic>();
   private sleep: (ms: number) => Promise<void>;
+
+  private get t(): Translator {
+    return this.opts.t ?? tEn;
+  }
 
   constructor(private opts: AnthropicLlmClientOptions) {
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -143,13 +150,11 @@ export class AnthropicLlmClient implements LlmClient {
 
   private async call(purpose: LlmPurpose, p: RawParams): Promise<{ text: string; usage: LlmUsage }> {
     const apiKey = this.opts.getApiKey();
-    if (!apiKey) throw new LlmNotConfiguredError();
+    if (!apiKey) throw new LlmNotConfiguredError(this.t("llm.notConfigured"));
     const spent = this.opts.budget.monthUsd();
     const limit = this.opts.budget.limitUsd();
     if (spent >= limit) {
-      throw new BudgetExceededError(
-        `Monthly budget of $${limit.toFixed(2)} reached ($${spent.toFixed(2)} spent)`,
-      );
+      throw new BudgetExceededError(this.t("llm.budget", { limit: `$${limit.toFixed(2)}`, spent: `$${spent.toFixed(2)}` }));
     }
     const client = this.clientFor(apiKey);
 
@@ -182,7 +187,7 @@ export class AnthropicLlmClient implements LlmClient {
         }
       }
     } catch (e) {
-      throw mapError(e);
+      throw mapError(e, this.t);
     }
 
     const usage = this.makeUsage(p.model, res.usage);
@@ -191,7 +196,7 @@ export class AnthropicLlmClient implements LlmClient {
 
     if (res.stop_reason === "refusal") {
       const cat = res.stop_details?.category;
-      throw new RefusalError(`The model declined to answer${cat ? ` (${cat})` : ""}`);
+      throw new RefusalError(cat ? this.t("llm.refusedCat", { category: cat }) : this.t("llm.refused"));
     }
     if (res.stop_reason === "max_tokens") throw new Error("response truncated");
     // A declined model's partial text can precede a "fallback" block: only the blocks after the last one count.
@@ -224,10 +229,10 @@ export class AnthropicLlmClient implements LlmClient {
   }
 }
 
-function mapError(e: unknown): unknown {
-  if (e instanceof Anthropic.AuthenticationError) return new Error("Invalid Anthropic API key");
+function mapError(e: unknown, t: Translator): unknown {
+  if (e instanceof Anthropic.AuthenticationError) return new Error(t("llm.invalidKey"));
   if (e instanceof Anthropic.APIError) {
-    return new Error(`Anthropic API error (${e.status ?? "?"}): ${e.message}`);
+    return new Error(t("llm.apiError", { status: e.status ?? "?", message: e.message }));
   }
   return e;
 }

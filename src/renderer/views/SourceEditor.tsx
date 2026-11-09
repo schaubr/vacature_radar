@@ -2,7 +2,9 @@ import { useRef, useState } from "react";
 import type { RenderMode, Source, SourceInput, SourceTestResult } from "../../shared/types";
 import { call, errMsg } from "../api";
 import { Icon, Modal, Switch } from "../components/ui";
-import { hostOf, usd } from "../util";
+import { hostOf } from "../util";
+import { useT } from "../i18n";
+import type { Translator } from "../../shared/i18n";
 
 export function SourceEditor({
   source,
@@ -17,6 +19,7 @@ export function SourceEditor({
   onAddPortal?: (p: Partial<SourceInput>) => void;
   onClose: () => void;
 }) {
+  const { t, fmt } = useT();
   const [name, setName] = useState(source?.name ?? prefill?.name ?? "");
   const [url, setUrl] = useState(source?.url ?? prefill?.url ?? "");
   const [renderMode, setRenderMode] = useState<RenderMode>(source?.renderMode ?? prefill?.renderMode ?? "auto");
@@ -67,50 +70,50 @@ export function SourceEditor({
 
   return (
     <Modal
-      title={source ? "Edit source" : "Add source"}
+      title={source ? t("editor.titleEdit") : t("editor.titleAdd")}
       onClose={onClose}
       footer={
         <>
-          <span className="foot-hint">{!result && !testErr ? "Tip: run Test before saving to check that vacancies are found." : saveErr ? <span className="err">{saveErr}</span> : ""}</span>
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={!canSave} onClick={save}>{source ? "Save" : "Add source"}</button>
+          <span className="foot-hint">{!result && !testErr ? t("editor.tip") : saveErr ? <span className="err">{saveErr}</span> : ""}</span>
+          <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="btn primary" disabled={!canSave} onClick={save}>{source ? t("common.save") : t("sources.add")}</button>
         </>
       }
     >
       <div className="form-grid">
         <label className="field span2">
-          <span>Name</span>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. VDAB: maatschappelijk werker" />
+          <span>{t("editor.name")}</span>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("editor.namePlaceholder")} />
         </label>
         <label className="field span2">
-          <span>Listing URL</span>
+          <span>{t("editor.url")}</span>
           <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" spellCheck={false} />
         </label>
         <label className="field">
-          <span>Render mode</span>
+          <span>{t("editor.renderMode")}</span>
           <select value={renderMode} onChange={(e) => setRenderMode(e.target.value as RenderMode)}>
-            <option value="auto">Auto (detect)</option>
-            <option value="static">Plain HTML</option>
-            <option value="browser">Browser (JavaScript sites)</option>
+            <option value="auto">{t("mode.autoDetect")}</option>
+            <option value="static">{t("mode.static")}</option>
+            <option value="browser">{t("mode.browserJs")}</option>
           </select>
         </label>
         <label className="field">
-          <span>Pages to scan</span>
+          <span>{t("editor.pages")}</span>
           <input type="number" min={1} max={5} value={maxPages} onChange={(e) => setMaxPages(e.target.value)} />
         </label>
         <label className="field">
-          <span>Scan interval (hours)</span>
-          <input type="number" min={0.25} step={0.25} value={interval} onChange={(e) => setIntervalH(e.target.value)} placeholder="Use global setting" />
+          <span>{t("editor.interval")}</span>
+          <input type="number" min={0.25} step={0.25} value={interval} onChange={(e) => setIntervalH(e.target.value)} placeholder={t("editor.intervalPlaceholder")} />
         </label>
         <div className="field">
-          <span>Enabled</span>
+          <span>{t("editor.enabled")}</span>
           <div className="field-switch">
-            <Switch checked={enabled} onChange={setEnabled} label="Enabled" />
-            <span className="subtle">{enabled ? "Scanned on schedule" : "Paused"}</span>
+            <Switch checked={enabled} onChange={setEnabled} label={t("editor.enabled")} />
+            <span className="subtle">{enabled ? t("editor.onSchedule") : t("editor.paused")}</span>
           </div>
         </div>
         <label className="field span2">
-          <span>Notes</span>
+          <span>{t("editor.notes")}</span>
           <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
         </label>
       </div>
@@ -118,29 +121,29 @@ export function SourceEditor({
       <div className="test-box">
         <div className="test-head">
           <div>
-            <b>Test this source</b>
-            <div className="subtle">Fetches the page and shows what would be collected. Nothing is saved.</div>
+            <b>{t("editor.testTitle")}</b>
+            <div className="subtle">{t("editor.testBody")}</div>
           </div>
           <button className="btn" disabled={!validUrl || testing} onClick={test}>
-            {testing ? <><span className="spinner" /> Testing…</> : <><Icon name="play" size={13} /> Test</>}
+            {testing ? <><span className="spinner" /> {t("editor.testing")}</> : <><Icon name="play" size={13} /> {t("common.test")}</>}
           </button>
         </div>
-        {testErr && <div className="callout red"><Icon name="warn" /><div><b>Test failed</b><span>{testErr}</span></div></div>}
+        {testErr && <div className="callout red"><Icon name="warn" /><div><b>{t("editor.testFailed")}</b><span>{testErr}</span></div></div>}
         {result && (
           <div className="test-result" ref={resultRef}>
             <div className="facts">
-              <Fact label="robots.txt" value={result.robotsAllowed ? "Allowed" : "Disallowed"} tone={result.robotsAllowed ? "green" : "red"} />
-              <Fact label="Mode used" value={result.modeUsed === "browser" ? "Browser" : "Plain HTML"} />
-              <Fact label="Strategy" value={result.strategy ?? "none"} />
-              <Fact label="Items" value={String(result.items.length)} tone={result.items.length ? "green" : "red"} />
-              <Fact label="AI cost" value={usd(result.llmCostUsd)} />
+              <Fact label={t("editor.fact.robots")} value={result.robotsAllowed ? t("editor.fact.allowed") : t("editor.fact.disallowed")} tone={result.robotsAllowed ? "green" : "red"} />
+              <Fact label={t("editor.fact.modeUsed")} value={result.modeUsed === "browser" ? t("mode.browser") : t("mode.static")} />
+              <Fact label={t("editor.fact.strategy")} value={t(`strategy.${result.strategy ?? "none"}`)} />
+              <Fact label={t("editor.fact.items")} value={String(result.items.length)} tone={result.items.length ? "green" : "red"} />
+              <Fact label={t("editor.fact.aiCost")} value={fmt.usd(result.llmCostUsd)} />
             </div>
-            <div className="subtle diag-line">{diagLine(result)}</div>
+            <div className="subtle diag-line">{diagLine(result, t, fmt.number)}</div>
             {addable.length > 0 && result.diagnostics.hint && (
               <div className="callout info">
                 <Icon name="info" />
                 <div>
-                  <b>Hosted job portal</b>
+                  <b>{t("editor.portal.title")}</b>
                   <span>{result.diagnostics.hint}</span>
                   {onAddPortal && addable.map((p) => (
                     <button
@@ -149,21 +152,21 @@ export function SourceEditor({
                       style={{ marginTop: 6, alignSelf: "flex-start" }}
                       onClick={() => onAddPortal({ name: `${name.trim() || hostOf(url) || p.host} (${p.name})`, url: p.rootUrl, renderMode: "auto", enabled: true })}
                     >
-                      <Icon name="plus" size={13} /> Add {p.host} as a source
+                      <Icon name="plus" size={13} /> {t("editor.portal.add", { host: p.host })}
                     </button>
                   ))}
                 </div>
               </div>
             )}
             {result.items.length === 0 && result.diagnostics.hint && addable.length === 0 && (
-              <div className="callout info"><Icon name="info" /><div><b>Why nothing was found</b><span>{result.diagnostics.hint}</span></div></div>
+              <div className="callout info"><Icon name="info" /><div><b>{t("editor.whyNothing")}</b><span>{result.diagnostics.hint}</span></div></div>
             )}
-            {result.error && result.error !== result.diagnostics.hint && <div className="callout red"><Icon name="warn" /><div><b>Problem</b><span>{result.error}</span></div></div>}
+            {result.error && result.error !== result.diagnostics.hint && <div className="callout red"><Icon name="warn" /><div><b>{t("editor.problem")}</b><span>{result.error}</span></div></div>}
             {result.items.length > 0 && (
               <div className="preview">
                 <table className="table compact">
                   <thead>
-                    <tr><th>Title</th><th style={{ width: 150 }}>Employer</th><th style={{ width: 100 }}>Location</th><th style={{ width: 90 }}>Link</th></tr>
+                    <tr><th>{t("editor.col.title")}</th><th style={{ width: 150 }}>{t("editor.col.employer")}</th><th style={{ width: 110 }}>{t("editor.col.location")}</th><th style={{ width: 90 }}>{t("editor.col.link")}</th></tr>
                   </thead>
                   <tbody>
                     {result.items.map((it, i) => (
@@ -185,10 +188,10 @@ export function SourceEditor({
   );
 }
 
-function diagLine(r: SourceTestResult): string {
+function diagLine(r: SourceTestResult, t: Translator, num: (n: number) => string): string {
   const d = r.diagnostics;
-  const parts = [`Text ${d.visibleTextChars.toLocaleString("en-US")} chars`, `${d.linkCount.toLocaleString("en-US")} links`];
-  if (d.frames.length > 0) parts.push("Frames: " + d.frames.map((f) => `${hostOf(f.url) || f.url} (${f.included ? "included" : "skipped"})`).join(", "));
+  const parts = [t("editor.diag.text", { n: num(d.visibleTextChars) }), t("editor.diag.links", { n: num(d.linkCount) })];
+  if (d.frames.length > 0) parts.push(t("editor.diag.frames", { list: d.frames.map((f) => `${hostOf(f.url) || f.url} (${f.included ? t("editor.diag.included") : t("editor.diag.skipped")})`).join(", ") }));
   return parts.join(" · ");
 }
 

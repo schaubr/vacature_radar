@@ -4,19 +4,15 @@ import { DEFAULT_PREFERENCES } from "../../shared/types";
 import { call, errMsg, onRadar } from "../api";
 import { Icon, ViewHeader } from "../components/ui";
 import type { Shared } from "../App";
-import { relativeTime } from "../util";
+import { useT } from "../i18n";
 
-const CONTRACTS: { id: string; label: string }[] = [
-  { id: "permanent", label: "Permanent" },
-  { id: "temporary", label: "Temporary" },
-  { id: "replacement", label: "Replacement" },
-  { id: "freelance", label: "Freelance" },
-];
+const CONTRACTS = ["permanent", "temporary", "replacement", "freelance"] as const;
 
 const csv = (a: string[]) => a.join(", ");
 const parseCsv = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
 export function ProfileView({ shared }: { shared: Shared }) {
+  const { t, fmt } = useT();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [markdown, setMarkdown] = useState("");
   const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFERENCES);
@@ -61,12 +57,12 @@ export function ProfileView({ shared }: { shared: Shared }) {
     try {
       const p = await call("profile.save", { markdown, preferences: { ...prefs, includeKeywords: parseCsv(inc), excludeKeywords: parseCsv(exc) } });
       apply(p);
-      setMsg({ tone: "ok", text: "Saved" });
-      setTimeout(() => setMsg((m) => (m?.text === "Saved" ? null : m)), 2500);
+      setMsg({ tone: "ok", text: t("profile.saved") });
+      setTimeout(() => setMsg((m) => (m?.tone === "ok" ? null : m)), 2500);
     } catch (e) {
       setMsg({ tone: "err", text: errMsg(e) });
     }
-  }, [markdown, prefs, inc, exc]);
+  }, [markdown, prefs, inc, exc, t]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -80,14 +76,14 @@ export function ProfileView({ shared }: { shared: Shared }) {
   }, [save]);
 
   const doImport = async () => {
-    if (dirty && !window.confirm("Importing replaces the profile text you have edited but not saved. Continue?")) return;
+    if (dirty && !window.confirm(t("profile.confirmImport"))) return;
     setImporting(true);
     setMsg(null);
     try {
       const p = await call("profile.import");
       if (p) {
         apply(p);
-        setMsg({ tone: "ok", text: "Imported. Review the text below, then save any edits." });
+        setMsg({ tone: "ok", text: t("profile.imported") });
       }
     } catch (e) {
       setMsg({ tone: "err", text: errMsg(e) });
@@ -96,16 +92,16 @@ export function ProfileView({ shared }: { shared: Shared }) {
     }
   };
 
-  const hint = "A street address is more precise than a town.";
+  const hint = t("profile.addressHint");
   const homeNote = (() => {
     const typed = prefs.homeLocation.trim();
     if (!profile || typed === "" || typed !== profile.preferences.homeLocation.trim()) return <small className="subtle">{hint}</small>;
     return (
       <small className="geo-note">
         {profile.homeGeo ? (
-          <span>Resolved: {profile.homeGeo.label}</span>
+          <span>{t("profile.resolved", { label: profile.homeGeo.label })}</span>
         ) : (
-          <span className={profile.homeGeoError ? "err-text" : "subtle"}>{profile.homeGeoError ?? "Not resolved yet."}</span>
+          <span className={profile.homeGeoError ? "err-text" : "subtle"}>{profile.homeGeoError ?? t("profile.notResolved")}</span>
         )}
         <span className="subtle">{hint}</span>
       </small>
@@ -114,116 +110,115 @@ export function ProfileView({ shared }: { shared: Shared }) {
 
   return (
     <>
-      <ViewHeader title="Profile" subtitle={profile ? (profile.version > 0 ? `version ${profile.version} · updated ${relativeTime(profile.updatedAt)}` : "not saved yet") : undefined}>
+      <ViewHeader title={t("nav.profile")} subtitle={profile ? (profile.version > 0 ? t("profile.version", { version: profile.version, when: fmt.relative(profile.updatedAt) }) : t("profile.notSaved")) : undefined}>
         {msg && <span className={`msg ${msg.tone}`} role="status">{msg.text}</span>}
-        <button className="btn primary" disabled={!dirty} onClick={save}>Save</button>
+        <button className="btn primary" disabled={!dirty} onClick={save}>{t("common.save")}</button>
       </ViewHeader>
       <div className="scroll">
         <div className="page profile-page">
           {!shared.status.profileReady && !markdown.trim() && (
-            <div className="callout amber"><Icon name="profile" /><div><b>No profile yet</b><span>Vacancies are scored against this text. Import your LinkedIn export, or write it yourself.</span></div></div>
+            <div className="callout amber"><Icon name="profile" /><div><b>{t("profile.none.title")}</b><span>{t("profile.none.body")}</span></div></div>
           )}
           <section className="card">
             <div className="card-row">
               <div>
-                <h3>Import from LinkedIn</h3>
-                <p className="subtle">Accepts the data-export <code>.zip</code> or a profile <code>.pdf</code>. Importing replaces the text below.</p>
+                <h3>{t("profile.import.title")}</h3>
+                <p className="subtle">{t("profile.import.body")}</p>
               </div>
               <button className="btn" disabled={importing} onClick={doImport}>
-                {importing ? <><span className="spinner" /> Importing…</> : <><Icon name="upload" size={14} /> Import LinkedIn export</>}
+                {importing ? <><span className="spinner" /> {t("profile.import.importing")}</> : <><Icon name="upload" size={14} /> {t("profile.import.button")}</>}
               </button>
             </div>
             <details className="howto">
-              <summary>How do I get the export?</summary>
+              <summary>{t("profile.howto")}</summary>
               <ol>
-                <li><b>Full data (.zip):</b> LinkedIn, Settings, Data privacy, <i>Get a copy of your data</i>. Choose the full archive or just Profile, Positions, Education, Skills. LinkedIn emails a link, usually within minutes to a day.</li>
-                <li><b>Quick PDF:</b> open your profile, More, <i>Save to PDF</i>. Claude turns it into the markdown below (a small API cost).</li>
+                <li><b>{t("profile.howto.zip.title")}</b> {t("profile.howto.zip.body")}</li>
+                <li><b>{t("profile.howto.pdf.title")}</b> {t("profile.howto.pdf.body")}</li>
               </ol>
             </details>
           </section>
 
           <section className="card">
-            <h3>Profile text</h3>
-            <p className="subtle">Markdown that describes you: experience, education, skills, languages. This is what every vacancy is compared against.</p>
+            <h3>{t("profile.text.title")}</h3>
+            <p className="subtle">{t("profile.text.body")}</p>
             <textarea
               className="mono profile-text"
               value={markdown}
               spellCheck={false}
-              placeholder={"# Name\n\n## Experience\n- Role, organization, period…"}
+              placeholder={t("profile.text.placeholder")}
               onChange={(e) => {
                 setMarkdown(e.target.value);
                 setDirty(true);
               }}
-              aria-label="Profile markdown"
+              aria-label={t("profile.text.aria")}
             />
           </section>
 
           <section className="card">
-            <h3>Preferences</h3>
-            <p className="subtle">What you want and what rules a vacancy out. Free text is passed to the scoring model as is.</p>
+            <h3>{t("profile.prefs.title")}</h3>
+            <p className="subtle">{t("profile.prefs.body")}</p>
             <div className="form-grid">
               <label className="field">
-                <span>Home location</span>
+                <span>{t("profile.home")}</span>
                 <input type="text" value={prefs.homeLocation} onChange={(e) => edit("homeLocation", e.target.value)} placeholder="Gent" />
-                {homeNote}
                 {homeNote}
               </label>
               <label className="field">
-                <span>Maximum commute</span>
-                <input type="text" value={prefs.maxCommute} onChange={(e) => edit("maxCommute", e.target.value)} placeholder="max 45 min by train or 40 km" />
+                <span>{t("profile.maxCommute")}</span>
+                <input type="text" value={prefs.maxCommute} onChange={(e) => edit("maxCommute", e.target.value)} placeholder={t("profile.maxCommutePlaceholder")} />
               </label>
               <label className="field span2">
-                <span>Regions</span>
+                <span>{t("profile.regions")}</span>
                 <input type="text" value={prefs.regions} onChange={(e) => edit("regions", e.target.value)} placeholder="Oost-Vlaanderen, Brussel" />
               </label>
               <label className="field">
-                <span>Hours</span>
+                <span>{t("profile.hours")}</span>
                 <select value={prefs.hours} onChange={(e) => edit("hours", e.target.value as Preferences["hours"])}>
-                  <option value="any">Any</option>
-                  <option value="fulltime">Full-time</option>
-                  <option value="parttime">Part-time</option>
+                  <option value="any">{t("profile.hours.any")}</option>
+                  <option value="fulltime">{t("profile.hours.fulltime")}</option>
+                  <option value="parttime">{t("profile.hours.parttime")}</option>
                 </select>
               </label>
               <fieldset className="field">
-                <legend>Contract types</legend>
+                <legend>{t("profile.contractTypes")}</legend>
                 <div className="checks">
                   {CONTRACTS.map((c) => (
-                    <label className="check" key={c.id}>
+                    <label className="check" key={c}>
                       <input
                         type="checkbox"
-                        checked={prefs.contractTypes.includes(c.id)}
-                        onChange={(e) => edit("contractTypes", e.target.checked ? [...prefs.contractTypes, c.id] : prefs.contractTypes.filter((x) => x !== c.id))}
+                        checked={prefs.contractTypes.includes(c)}
+                        onChange={(e) => edit("contractTypes", e.target.checked ? [...prefs.contractTypes, c] : prefs.contractTypes.filter((x) => x !== c))}
                       />
-                      {c.label}
+                      {t(`profile.contract.${c}`)}
                     </label>
                   ))}
                 </div>
               </fieldset>
               <label className="field span2">
-                <span>Desired roles</span>
+                <span>{t("profile.desiredRoles")}</span>
                 <textarea rows={2} value={prefs.desiredRoles} onChange={(e) => edit("desiredRoles", e.target.value)} />
               </label>
               <label className="field span2">
-                <span>Ambitions</span>
+                <span>{t("profile.ambitions")}</span>
                 <textarea rows={2} value={prefs.ambitions} onChange={(e) => edit("ambitions", e.target.value)} />
               </label>
               <label className="field span2">
-                <span>Deal-breakers</span>
+                <span>{t("profile.dealBreakers")}</span>
                 <textarea rows={2} value={prefs.dealBreakers} onChange={(e) => edit("dealBreakers", e.target.value)} />
               </label>
               <label className="field span2">
-                <span>Salary notes</span>
+                <span>{t("profile.salary")}</span>
                 <input type="text" value={prefs.salaryNotes} onChange={(e) => edit("salaryNotes", e.target.value)} />
               </label>
               <label className="field span2">
-                <span>Must mention (keywords)</span>
-                <input type="text" value={inc} onChange={(e) => { setInc(e.target.value); setDirty(true); }} placeholder="comma separated; empty = no restriction" />
-                <small className="subtle">Pre-filter: when set, a vacancy’s title or snippet must contain one of these before it is scored.</small>
+                <span>{t("profile.include")}</span>
+                <input type="text" value={inc} onChange={(e) => { setInc(e.target.value); setDirty(true); }} placeholder={t("profile.includePlaceholder")} />
+                <small className="subtle">{t("profile.includeHelp")}</small>
               </label>
               <label className="field span2">
-                <span>Exclude from title (keywords)</span>
-                <input type="text" value={exc} onChange={(e) => { setExc(e.target.value); setDirty(true); }} placeholder="comma separated, e.g. poetsvrouw, chauffeur" />
-                <small className="subtle">Vacancies whose title contains any of these are never scored, which saves money.</small>
+                <span>{t("profile.exclude")}</span>
+                <input type="text" value={exc} onChange={(e) => { setExc(e.target.value); setDirty(true); }} placeholder={t("profile.excludePlaceholder")} />
+                <small className="subtle">{t("profile.excludeHelp")}</small>
               </label>
             </div>
           </section>

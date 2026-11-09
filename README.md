@@ -1,6 +1,6 @@
 # Vacature Radar
 
-A personal macOS menu-bar app that watches Flemish social-sector job sites (VDAB, VVSG, Jobsolutions, Fiola vzw and any listing page you add), extracts the vacancies, and scores each one against your LinkedIn profile with Claude. New strong matches arrive as a notification. Everything runs on your Mac.
+A personal macOS menu-bar app that watches Flemish social-sector job sites (VDAB, VVSG, Jobsolutions, Fiola vzw, Socius and any listing page you add), extracts the vacancies, and scores each one against your LinkedIn profile with Claude. New strong matches arrive as a notification. Everything runs on your Mac.
 
 ## Requirements
 
@@ -17,9 +17,9 @@ npm run dist:mac
 
 Then drag `release/mac-arm64/Vacature Radar.app` to `/Applications`. The app carries an ad-hoc signature only, so on first launch macOS may say it cannot be verified: open System Settings > Privacy & Security and choose Open Anyway.
 
-`npm start` builds and runs the app without packaging.
+`npm start` packages the app into `release/mac-arm64/Vacature Radar.app` and opens it, so the Dock and menu bar show "Vacature Radar". `npm run dev` runs it without packaging, which is faster to start but shows "Electron" in the Dock and menu bar.
 
-Closing the window keeps the app running in the menu bar (the ◎ icon). Scans run every 6 hours while the Mac is awake, and a missed scan is caught up after the Mac wakes. Quit from the menu bar icon.
+Closing the window keeps the app running in the menu bar (the ◎ icon). Scans run every 6 hours while the Mac is awake, and a missed scan is caught up after the Mac wakes. Quit from the menu bar icon. The interface language can be switched between English and Dutch with the EN | NL toggle in the sidebar and in Settings.
 
 ## First-time setup
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { translatorFor, type Translator } from "../src/shared/i18n";
 import { strToU8, zipSync } from "fflate";
 import { Store } from "../src/core/db/store";
 import type { LlmClient } from "../src/core/llm/client";
@@ -15,7 +16,7 @@ const srcInput = (over: Partial<SourceInput> = {}): SourceInput => ({
   name: "VVSG", url: VVSG_URL, enabled: true, renderMode: "static", scanIntervalHours: null, maxPages: 1, notes: "", ...over,
 });
 
-function setup(opts: { key?: string | null; secureStorage?: boolean; file?: { path: string; data: Uint8Array } | null; llm?: LlmClient | null; orsKey?: string | null } = {}) {
+function setup(opts: { t?: Translator; key?: string | null; secureStorage?: boolean; file?: { path: string; data: Uint8Array } | null; llm?: LlmClient | null; orsKey?: string | null; reentry?: boolean } = {}) {
   const store = new Store(":memory:");
   let key: string | null = opts.key === undefined ? null : opts.key;
   const secrets: SecretsPort = {
@@ -23,6 +24,7 @@ function setup(opts: { key?: string | null; secureStorage?: boolean; file?: { pa
     set: (k) => { key = k; },
     clear: () => { key = null; },
     available: () => opts.secureStorage !== false,
+    needsReentry: () => opts.reentry === true,
   };
   let orsKey: string | null = opts.orsKey ?? null;
   const orsSecrets: SecretsPort = {
@@ -30,6 +32,7 @@ function setup(opts: { key?: string | null; secureStorage?: boolean; file?: { pa
     set: (k) => { orsKey = k; },
     clear: () => { orsKey = null; },
     available: () => opts.secureStorage !== false,
+    needsReentry: () => opts.reentry === true,
   };
   const recomputeAll = vi.fn(async () => ({ updated: 2, failed: 1 }));
   const validateOrsKey = vi.fn(async (k: string) => { if (k === "bad") throw new Error("Invalid OpenRouteService API key"); });
@@ -50,6 +53,7 @@ function setup(opts: { key?: string | null; secureStorage?: boolean; file?: { pa
   const service = new RadarService({
     store, scanner, scheduler, llm, secrets, now, emit, onSettingsChanged, validateKey, orsSecrets, validateOrsKey, travel: { recomputeAll },
     shell: { openExternal: (u) => opened.push(u), pickImportFile: async () => opts.file ?? null },
+    t: opts.t,
   });
   const names = () => events.map((e) => e.name);
   return { store, service, events, names, opened, onSettingsChanged, validateKey, getKey: () => key, getOrsKey: () => orsKey, recomputeAll, validateOrsKey };
@@ -66,11 +70,12 @@ describe("RadarService", () => {
     expect(seedSources(store)).toBe(SEED_SOURCES.length);
     expect(seedSources(store)).toBe(0);
     const list = store.listSources();
-    expect(list).toHaveLength(7);
-    expect(list.at(-1)).toMatchObject({ name: "Fiola vzw", url: "https://fiolavzw.be/vacatures/", enabled: true, renderMode: "static", strategy: "recipe" });
-    expect(list.filter((s) => s.enabled).map((s) => s.renderMode)).toEqual(["browser", "browser", "static", "static", "static"]);
+    expect(list).toHaveLength(8);
+    expect(list.find((s) => s.name === "Fiola vzw")).toMatchObject({ url: "https://fiolavzw.be/vacatures/", enabled: true, renderMode: "static", strategy: "recipe" });
+    expect(list.at(-1)).toMatchObject({ name: "Socius (sociaal-cultureel werk)", url: "https://socius.be/vacature/", enabled: true, renderMode: "static", strategy: "recipe", maxPages: 3 });
+    expect(list.filter((s) => s.enabled).map((s) => s.renderMode)).toEqual(["browser", "browser", "static", "static", "static", "static"]);
     const withRecipe = list.filter((s) => s.recipe);
-    expect(withRecipe.map((s) => s.strategy)).toEqual(["recipe", "recipe", "recipe", "recipe", "recipe"]);
+    expect(withRecipe.map((s) => s.strategy)).toEqual(["recipe", "recipe", "recipe", "recipe", "recipe", "recipe"]);
     expect(list.filter((s) => !s.enabled).every((s) => s.recipe === null)).toBe(true);
     expect(list.filter((s) => !s.enabled).every((s) => /Use Test before enabling/.test(s.notes))).toBe(true);
     const zn = list.find((s) => s.name === "Zorgnet-Icuro")!;
@@ -91,18 +96,42 @@ describe("RadarService", () => {
       return store;
     };
 
-    it("a fresh install gets all 7 seeds including Fiola and stores the revision", () => {
+    const socius = (store: Store) => store.listSources().find((s) => s.url === "https://socius.be/vacature/");
+
+    it("a fresh install gets all 8 seeds including Fiola and Socius and stores the revision", () => {
       const { store } = setup();
-      expect(seedSources(store)).toBe(7);
+      expect(seedSources(store)).toBe(8);
       expect(fiola(store)).toBeTruthy();
-      expect(store.getMeta("seedRevision")).toBe(2);
+      expect(socius(store)).toBeTruthy();
+      expect(store.getMeta("seedRevision")).toBe(3);
     });
 
-    it("an existing install without a revision gains only Fiola", () => {
+    it("a revision 2 install gains only Socius", () => {
+      const store = legacy();
+      const { since: _s, ...fi } = SEED_SOURCES.find((x) => x.since === 2)!;
+      store.createSource(fi);
+      store.setMeta("seedRevision", 2);
+      expect(seedSources(store)).toBe(1);
+      expect(store.listSources()).toHaveLength(8);
+      expect(socius(store)).toMatchObject({ enabled: true, renderMode: "static", strategy: "recipe", maxPages: 3 });
+      expect(store.getMeta("seedRevision")).toBe(3);
+      expect(seedSources(store)).toBe(0);
+    });
+
+    it("a deleted Socius is not re-added", () => {
+      const { store } = setup();
+      seedSources(store);
+      store.deleteSource(socius(store)!.id);
+      expect(seedSources(store)).toBe(0);
+      expect(socius(store)).toBeUndefined();
+      expect(store.listSources()).toHaveLength(7);
+    });
+
+    it("an existing install without a revision gains Fiola and Socius", () => {
       const store = legacy();
       expect(store.getMeta("seedRevision")).toBeNull();
-      expect(seedSources(store)).toBe(1);
-      expect(store.listSources()).toHaveLength(7);
+      expect(seedSources(store)).toBe(2);
+      expect(store.listSources()).toHaveLength(8);
       expect(fiola(store)).toMatchObject({ enabled: true, renderMode: "static", strategy: "recipe" });
       expect(seedSources(store)).toBe(0);
     });
@@ -114,14 +143,14 @@ describe("RadarService", () => {
       expect(seedSources(store)).toBe(0);
       expect(seedSources(store)).toBe(0);
       expect(fiola(store)).toBeUndefined();
-      expect(store.listSources()).toHaveLength(6);
+      expect(store.listSources()).toHaveLength(7);
     });
 
     it("does not duplicate a seed whose URL the owner already added (canonical compare)", () => {
       const store = legacy();
       store.createSource(srcInput({ name: "My Fiola", url: "https://FIOLAVZW.be/vacatures?utm_source=x" }));
-      expect(seedSources(store)).toBe(0);
-      expect(store.listSources()).toHaveLength(7);
+      expect(seedSources(store)).toBe(1); // only Socius
+      expect(store.listSources()).toHaveLength(8);
     });
   });
 
@@ -234,6 +263,16 @@ describe("RadarService", () => {
     expect(service["settings.get"]()).toEqual(s);
     expect(onSettingsChanged).toHaveBeenCalledWith(s, { monthlyBudgetUsd: 9, launchAtLogin: false });
     expect(events.at(-1)!.name).toBe("app.status");
+  });
+
+  it("apiKey/orsKey status expose needsReentry only when a stored key could not be decrypted", () => {
+    expect(setup().service["apiKey.status"]()).toEqual({ configured: false, masked: null });
+    expect(setup().service["orsKey.status"]()).toEqual({ configured: false, masked: null });
+    const t = setup({ reentry: true });
+    expect(t.service["apiKey.status"]()).toEqual({ configured: false, masked: null, needsReentry: true });
+    expect(t.service["orsKey.status"]()).toEqual({ configured: false, masked: null, needsReentry: true });
+    // a readable key never reports it
+    expect(setup({ reentry: true, key: "sk-ant-api03-abcdefghijklmnop" }).service["apiKey.status"]().needsReentry).toBeUndefined();
   });
 
   it("apiKey set/status/clear with validation and secure storage failure", async () => {
@@ -358,5 +397,17 @@ describe("RadarService", () => {
       b.store.setHomeGeo({ query: "gent", label: "Gent", lat: 51, lon: 3 });
       expect(b.service["app.status"]().travelConfigured).toBe(false);
     });
+  });
+});
+
+describe("RadarService in Dutch", () => {
+  const t = translatorFor(() => "nl");
+  it("translates validation and import errors", async () => {
+    const { service } = setup({ t, secureStorage: false });
+    expect(await service["apiKey.set"]("   ")).toEqual({ ok: false, error: "Geef een API-sleutel in" });
+    expect(await service["apiKey.set"]("sk-x")).toEqual({ ok: false, error: "Veilige opslag is niet beschikbaar op dit systeem" });
+    expect(() => service["sources.update"](9999, {})).toThrow("Bron niet gevonden");
+    const pdf = setup({ t, file: { path: "/x/cv.docx", data: new Uint8Array() } });
+    await expect(pdf.service["profile.import"]()).rejects.toThrow(/Niet-ondersteund bestandstype/);
   });
 });

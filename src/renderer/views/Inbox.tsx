@@ -4,19 +4,14 @@ import { call } from "../api";
 import { Empty, Icon, ScorePill, Segmented, ViewHeader } from "../components/ui";
 import type { Shared } from "../App";
 import { formatTravel } from "../../shared/travel";
-import { isTypingTarget, relativeTime, useDebounced } from "../util";
+import { isTypingTarget, useDebounced } from "../util";
+import { useT } from "../i18n";
 import { VacancyDetailPane } from "./VacancyDetail";
 
-const CHIPS: { id: VacancyStatus; label: string }[] = [
-  { id: "new", label: "New" },
-  { id: "seen", label: "Seen" },
-  { id: "interested", label: "Interested" },
-  { id: "applied", label: "Applied" },
-  { id: "dismissed", label: "Dismissed" },
-  { id: "closed", label: "Closed" },
-];
+const CHIPS: VacancyStatus[] = ["new", "seen", "interested", "applied", "dismissed", "closed"];
 
 export function Inbox({ shared, focus }: { shared: Shared; focus: { id: number; n: number } | null }) {
+  const { t } = useT();
   const { status, counts, sources, tick } = shared;
   const [statuses, setStatuses] = useState<VacancyStatus[]>([]);
   const [minScore, setMinScore] = useState(0);
@@ -118,11 +113,11 @@ export function Inbox({ shared, focus }: { shared: Shared; focus: { id: number; 
         <div className="callout amber">
           <Icon name="key" />
           <div>
-            <b>Add your Anthropic API key</b>
-            <span>Vacancies are collected, but scoring needs a key.</span>
+            <b>{t("inbox.addKey.title")}</b>
+            <span>{t("inbox.addKey.body")}</span>
           </div>
           <button className="btn small" onClick={() => shared.go("settings")}>
-            Open Settings
+            {t("inbox.openSettings")}
           </button>
         </div>
       )}
@@ -130,11 +125,11 @@ export function Inbox({ shared, focus }: { shared: Shared; focus: { id: number; 
         <div className="callout amber">
           <Icon name="profile" />
           <div>
-            <b>Set up your profile</b>
-            <span>Import your LinkedIn export so vacancies can be scored against it.</span>
+            <b>{t("inbox.setupProfile.title")}</b>
+            <span>{t("inbox.setupProfile.body")}</span>
           </div>
           <button className="btn small" onClick={() => shared.go("profile")}>
-            Open Profile
+            {t("inbox.openProfile")}
           </button>
         </div>
       )}
@@ -143,43 +138,43 @@ export function Inbox({ shared, focus }: { shared: Shared; focus: { id: number; 
 
   return (
     <>
-      <ViewHeader title="Inbox" subtitle={items ? `${items.length} vacanc${items.length === 1 ? "y" : "ies"}` : undefined}>
+      <ViewHeader title={t("nav.inbox")} subtitle={items ? t("inbox.count", { count: items.length }) : undefined}>
         <label className="search">
           <Icon name="search" size={14} />
-          <input type="search" placeholder="Search vacancies" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search vacancies" />
+          <input type="search" placeholder={t("inbox.search")} value={search} onChange={(e) => setSearch(e.target.value)} aria-label={t("inbox.search")} />
         </label>
-        <select className="drive-select" value={maxDrive ?? ""} onChange={(e) => setMaxDrive(e.target.value ? Number(e.target.value) : null)} aria-label="Max drive" title="Max drive (by car). Hides vacancies with a known drive time above this; unknown stays visible.">
-          <option value="">Max drive: any</option>
+        <select className="drive-select" value={maxDrive ?? ""} onChange={(e) => setMaxDrive(e.target.value ? Number(e.target.value) : null)} aria-label={t("inbox.maxDrive")} title={t("travel.driveTitle")}>
+          <option value="">{t("inbox.maxDriveAny")}</option>
           {[15, 30, 45, 60, 90].map((m) => (
-            <option key={m} value={m}>Max drive: {m} min</option>
+            <option key={m} value={m}>{t("inbox.maxDriveN", { min: m })}</option>
           ))}
         </select>
         <Segmented
-          label="Sort by"
+          label={t("inbox.sortBy")}
           value={sort}
           onChange={setSort}
           options={[
-            { id: "score", label: "Score" },
-            { id: "date", label: "Date" },
-            { id: "distance", label: "Distance" },
+            { id: "score", label: t("inbox.sort.score") },
+            { id: "date", label: t("inbox.sort.date") },
+            { id: "distance", label: t("inbox.sort.distance") },
           ]}
         />
       </ViewHeader>
       <div className="filters">
-        <div className="chips" role="group" aria-label="Status filter">
+        <div className="chips" role="group" aria-label={t("inbox.statusFilter")}>
           {CHIPS.map((c) => (
-            <button key={c.id} className={`chip${statuses.includes(c.id) ? " on" : ""}`} aria-pressed={statuses.includes(c.id)} onClick={() => toggleStatus(c.id)}>
-              {c.label}
+            <button key={c} className={`chip${statuses.includes(c) ? " on" : ""}`} aria-pressed={statuses.includes(c)} onClick={() => toggleStatus(c)}>
+              {t(`vstatus.${c}`)}
             </button>
           ))}
         </div>
         <label className="inline-field">
-          <span>Min score</span>
-          <input type="range" min={0} max={100} step={5} value={minScore} onChange={(e) => setMinScore(Number(e.target.value))} aria-label="Minimum score" />
+          <span>{t("inbox.minScore")}</span>
+          <input type="range" min={0} max={100} step={5} value={minScore} onChange={(e) => setMinScore(Number(e.target.value))} aria-label={t("inbox.minScoreAria")} />
           <output>{minScore}</output>
         </label>
-        <select value={sourceId ?? ""} onChange={(e) => setSourceId(e.target.value ? Number(e.target.value) : null)} aria-label="Source">
-          <option value="">All sources</option>
+        <select value={sourceId ?? ""} onChange={(e) => setSourceId(e.target.value ? Number(e.target.value) : null)} aria-label={t("inbox.source")}>
+          <option value="">{t("inbox.allSources")}</option>
           {sources.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
@@ -188,58 +183,61 @@ export function Inbox({ shared, focus }: { shared: Shared; focus: { id: number; 
         </select>
         <label className="check">
           <input type="checkbox" checked={includeUnscored} onChange={(e) => setIncludeUnscored(e.target.checked)} />
-          Include unscored
+          {t("inbox.includeUnscored")}
         </label>
       </div>
       <div className="split">
-        <section className="list-pane" aria-label="Vacancies">
+        <section className="list-pane" aria-label={t("inbox.listAria")}>
           <div className="list-scroll">
             {setupCards}
             {items && items.length === 0 && (
               counts && counts.total === 0 ? (
                 <Empty
                   icon="inbox"
-                  title="No vacancies yet"
+                  title={t("inbox.empty.title")}
                   action={
                     <button className="btn primary" disabled={status.scanning} onClick={() => call("scan.now", null)}>
-                      Scan now
+                      {t("action.scanNow")}
                     </button>
                   }
                 >
-                  Run a first scan to collect vacancies from your sources.
+                  {t("inbox.empty.body")}
                 </Empty>
               ) : (
                 <Empty
                   icon="search"
-                  title="Nothing matches"
+                  title={t("inbox.nothing.title")}
                   action={
                     filtersActive ? (
                       <button className="btn" onClick={reset}>
-                        Clear filters
+                        {t("inbox.clearFilters")}
                       </button>
                     ) : undefined
                   }
                 >
-                  {filtersActive ? "No vacancies fit the current filters." : "Everything has been dismissed or closed."}
+                  {filtersActive ? t("inbox.nothing.filters") : t("inbox.nothing.dismissed")}
                 </Empty>
               )
             )}
-            <div role="listbox" aria-label="Vacancy list">
+            <div role="listbox" aria-label={t("inbox.listboxAria")}>
               {items?.map((v) => (
                 <Row key={v.id} v={v} selected={v.id === selected} onSelect={() => setSelected(v.id)} />
               ))}
             </div>
           </div>
           <div className="hint-bar">
-            <kbd>↑</kbd>
-            <kbd>↓</kbd> move <kbd>o</kbd> open <kbd>i</kbd> interested <kbd>a</kbd> applied <kbd>d</kbd> dismiss
+            <span className="hint-item"><kbd>↑</kbd> <kbd>↓</kbd> {t("hint.move")}</span>
+            <span className="hint-item"><kbd>o</kbd> {t("hint.open")}</span>
+            <span className="hint-item"><kbd>i</kbd> {t("hint.interested")}</span>
+            <span className="hint-item"><kbd>a</kbd> {t("hint.applied")}</span>
+            <span className="hint-item"><kbd>d</kbd> {t("hint.dismiss")}</span>
           </div>
         </section>
-        <section className="detail-pane" aria-label="Vacancy detail">
+        <section className="detail-pane" aria-label={t("inbox.detailAria")}>
           {selected != null ? (
             <VacancyDetailPane go={shared.go} id={selected} tick={tick + local} onChanged={() => setLocal((n) => n + 1)} onAct={act} />
           ) : (
-            <Empty icon="inbox" title="No vacancy selected">Pick one from the list to read the details.</Empty>
+            <Empty icon="inbox" title={t("inbox.noSelection.title")}>{t("inbox.noSelection.body")}</Empty>
           )}
         </section>
       </div>
@@ -248,6 +246,7 @@ export function Inbox({ shared, focus }: { shared: Shared; focus: { id: number; 
 }
 
 function Row({ v, selected, onSelect }: { v: VacancyListItem; selected: boolean; onSelect: () => void }) {
+  const { t, lang, fmt } = useT();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (selected) ref.current?.scrollIntoView({ block: "nearest" });
@@ -256,28 +255,28 @@ function Row({ v, selected, onSelect }: { v: VacancyListItem; selected: boolean;
   const dim = v.status === "dismissed" || v.status === "closed";
   return (
     <div ref={ref} role="option" aria-selected={selected} tabIndex={0} className={`row${selected ? " selected" : ""}${dim ? " dim" : ""}`} onClick={onSelect} onKeyDown={(e) => e.key === "Enter" && onSelect()}>
-      <span className={`unread${isNew ? " on" : ""}`} title={isNew ? "New" : undefined} />
+      <span className={`unread${isNew ? " on" : ""}`} title={isNew ? t("row.new") : undefined} />
       <div className="row-score">
         <ScorePill item={v} />
       </div>
       <div className="row-main">
         <div className={`row-title${isNew ? " bold" : ""}`}>{v.title}</div>
         <div className="row-sub">
-          <span className="row-sub-text">{[v.organization, v.location].filter(Boolean).join(" · ") || "Unknown employer"}</span>
+          <span className="row-sub-text">{[v.organization, v.location].filter(Boolean).join(" · ") || t("common.unknownEmployer")}</span>
           {v.travelMinutes != null && (
-            <span className="travel" title={formatTravel(v)}>
+            <span className="travel" title={formatTravel(v, lang)}>
               <Icon name="car" size={13} />
               {v.geoState === "approximate" ? "≈ " : ""}
-              {Math.round(v.travelMinutes)} min
+              {t("travel.minShort", { min: Math.round(v.travelMinutes) })}
             </span>
           )}
         </div>
         <div className="row-meta">
           <span>{v.sourceName}</span>
-          <span>first seen {relativeTime(v.firstSeenAt)}</span>
-          {v.deadline && <span>deadline {v.deadline}</span>}
-          {v.duplicateCount > 0 && <span className="tag">+{v.duplicateCount} duplicate{v.duplicateCount > 1 ? "s" : ""}</span>}
-          {(v.status === "interested" || v.status === "applied" || v.status === "dismissed" || v.status === "closed") && <span className={`tag st-${v.status}`}>{v.status}</span>}
+          <span>{t("row.firstSeen", { when: fmt.relative(v.firstSeenAt) })}</span>
+          {v.deadline && <span>{t("row.deadline", { date: /^\d{4}-\d{2}-\d{2}$/.test(v.deadline) ? fmt.date(v.deadline) : v.deadline })}</span>}
+          {v.duplicateCount > 0 && <span className="tag">{t("row.duplicates", { count: v.duplicateCount })}</span>}
+          {(v.status === "interested" || v.status === "applied" || v.status === "dismissed" || v.status === "closed") && <span className={`tag st-${v.status}`}>{t(`vstatus.${v.status}`)}</span>}
         </div>
       </div>
     </div>

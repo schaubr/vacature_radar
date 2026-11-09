@@ -1,4 +1,5 @@
 /** Minimal OpenRouteService client (geocode + driving matrix). Contract: DESIGN.md 14.1. */
+import { tEn, type Translator } from "../../shared/i18n";
 
 export type JsonHttp = (
   url: string,
@@ -36,6 +37,8 @@ export interface OrsOptions {
   timeoutMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** Translator for error messages, resolved at call time (default English). */
+  t?: Translator;
 }
 
 const BASE = "https://api.openrouteservice.org";
@@ -48,6 +51,10 @@ export class OrsClient {
   private readonly sleep: (ms: number) => Promise<void>;
   private lastStart = -Infinity;
   private chain: Promise<unknown> = Promise.resolve();
+
+  private get t(): Translator {
+    return this.o.t ?? tEn;
+  }
 
   constructor(private readonly o: OrsOptions) {
     this.minIntervalMs = o.minIntervalMs ?? 1600;
@@ -63,7 +70,7 @@ export class OrsClient {
       `&text=${encodeURIComponent(text)}&boundary.country=BE&size=1`;
     const json = await this.request(url, { method: "GET", headers: { Accept: "application/json" } });
     const features = (json as { features?: unknown })?.features;
-    if (!Array.isArray(features)) throw new OrsError("Unexpected geocode response", "bad_response");
+    if (!Array.isArray(features)) throw new OrsError(this.t("ors.unexpected"), "bad_response");
     if (features.length === 0) return null;
     const f = features[0] as {
       geometry?: { coordinates?: unknown };
@@ -71,7 +78,7 @@ export class OrsClient {
     };
     const c = f.geometry?.coordinates;
     if (!Array.isArray(c) || typeof c[0] !== "number" || typeof c[1] !== "number") {
-      throw new OrsError("Unexpected geocode response", "bad_response");
+      throw new OrsError(this.t("ors.unexpected"), "bad_response");
     }
     const p = f.properties ?? {};
     return {
@@ -104,7 +111,7 @@ export class OrsClient {
       const dur = json?.durations?.[0];
       const dist = json?.distances?.[0];
       if (!Array.isArray(dur) || !Array.isArray(dist) || dur.length !== chunk.length || dist.length !== chunk.length) {
-        throw new OrsError("Unexpected matrix response", "bad_response");
+        throw new OrsError(this.t("ors.unexpected"), "bad_response");
       }
       for (let j = 0; j < chunk.length; j++) {
         const s = dur[j];
@@ -118,7 +125,7 @@ export class OrsClient {
 
   private requireKey(): string {
     const k = this.o.getKey();
-    if (!k) throw new OrsError("No OpenRouteService API key configured", "auth");
+    if (!k) throw new OrsError(this.t("ors.noKey"), "auth");
     return k;
   }
 
@@ -144,25 +151,25 @@ export class OrsClient {
         res = await Promise.race([this.o.http(url, { ...init, signal: ctrl.signal }), timeout]);
       } catch (e) {
         throw new OrsError(
-          `Could not reach OpenRouteService: ${e instanceof Error ? e.message : String(e)}`,
+          this.t("ors.unreachable", { error: e instanceof Error ? e.message : String(e) }),
           "network",
         );
       } finally {
         if (timer) clearTimeout(timer);
       }
       if (res.status === 401 || res.status === 403) {
-        throw new OrsError("Invalid OpenRouteService API key or access denied", "auth", res.status);
+        throw new OrsError(this.t("ors.auth"), "auth", res.status);
       }
       if (res.status === 429) {
-        throw new OrsError("OpenRouteService rate limit or daily quota reached", "quota", res.status);
+        throw new OrsError(this.t("ors.quota"), "quota", res.status);
       }
       if (res.status < 200 || res.status >= 300) {
-        throw new OrsError(`OpenRouteService returned HTTP ${res.status}`, "bad_response", res.status);
+        throw new OrsError(this.t("ors.http", { status: res.status }), "bad_response", res.status);
       }
       try {
         return JSON.parse(res.body);
       } catch {
-        throw new OrsError("OpenRouteService returned invalid JSON", "bad_response", res.status);
+        throw new OrsError(this.t("ors.invalidJson"), "bad_response", res.status);
       }
     };
     const p = this.chain.then(run, run);

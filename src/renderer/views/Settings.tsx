@@ -5,13 +5,16 @@ import { MODELS } from "../../shared/models";
 import { call, errMsg } from "../api";
 import { Bar, Segmented, Switch, ViewHeader } from "../components/ui";
 import type { Shared } from "../App";
-import { MODEL_PRICE, useLoad, usd } from "../util";
+import { useLoad } from "../util";
+import { useT } from "../i18n";
 
-const PURPOSE_LABEL: Record<string, string> = {
-  score: "Scoring vacancies",
-  learn_recipe: "Learning page layouts",
-  extract_listing: "Reading listings (fallback)",
-  profile_import: "Profile import",
+
+const PURPOSES = ["score", "learn_recipe", "extract_listing", "profile_import"] as const;
+/** List prices (USD per million tokens), shown next to the model pickers. */
+const MODEL_PRICE: Record<ModelId, { in: string; out: string }> = {
+  "claude-opus-5-5": { in: "$4", out: "$20" },
+  "claude-sonnet-5-5": { in: "$2", out: "$10" },
+  "claude-haiku-5-5": { in: "$0.10", out: "$0.50" },
 };
 
 function Row({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
@@ -46,6 +49,8 @@ function NumberField({ value, onCommit, min, max, step = 1, suffix, label }: { v
 }
 
 export function SettingsView({ shared }: { shared: Shared }) {
+  const { t, lang, setLang, fmt } = useT();
+  const price = (m: ModelId) => t("model.price", MODEL_PRICE[m]);
   const [s, setS] = useState<Settings>(DEFAULT_SETTINGS);
   const [loaded, setLoaded] = useState(false);
   const key = useLoad(() => call("apiKey.status"), [shared.status.apiKeyConfigured, shared.tick]);
@@ -88,9 +93,9 @@ export function SettingsView({ shared }: { shared: Shared }) {
       if (r.ok) {
         setKeyInput("");
         setReplace(false);
-        setKeyMsg({ tone: "ok", text: "Key verified and stored in the macOS keychain." });
+        setKeyMsg({ tone: "ok", text: t("settings.keyStored") });
         key.reload();
-      } else setKeyMsg({ tone: "err", text: r.error ?? "The key was rejected." });
+      } else setKeyMsg({ tone: "err", text: r.error ?? t("settings.keyRejected") });
     } catch (e) {
       setKeyMsg({ tone: "err", text: errMsg(e) });
     } finally {
@@ -106,9 +111,9 @@ export function SettingsView({ shared }: { shared: Shared }) {
       if (r.ok) {
         setOrsInput("");
         setOrsReplace(false);
-        setOrsMsg({ tone: "ok", text: "Key verified and stored in the macOS keychain. Travel times are being calculated." });
+        setOrsMsg({ tone: "ok", text: t("settings.ors.stored") });
         ors.reload();
-      } else setOrsMsg({ tone: "err", text: r.error ?? "The key was rejected." });
+      } else setOrsMsg({ tone: "err", text: r.error ?? t("settings.keyRejected") });
     } catch (e) {
       setOrsMsg({ tone: "err", text: errMsg(e) });
     } finally {
@@ -120,7 +125,7 @@ export function SettingsView({ shared }: { shared: Shared }) {
     setRecompute(null);
     try {
       const r = await call("travel.recompute");
-      setRecompute({ tone: r.updated === 0 && r.failed > 0 ? "err" : "ok", text: `${r.updated} updated, ${r.failed} failed` });
+      setRecompute({ tone: r.updated === 0 && r.failed > 0 ? "err" : "ok", text: t("settings.recompute.result", { updated: r.updated, failed: r.failed }) });
     } catch (e) {
       setRecompute({ tone: "err", text: errMsg(e) });
     } finally {
@@ -136,111 +141,111 @@ export function SettingsView({ shared }: { shared: Shared }) {
 
   return (
     <>
-      <ViewHeader title="Settings">{err && <span className="msg err">{err}</span>}</ViewHeader>
+      <ViewHeader title={t("nav.settings")}>{err && <span className="msg err">{err}</span>}</ViewHeader>
       <div className="scroll">
         <div className="page settings-page" aria-busy={!loaded}>
           <section className="card">
-            <h3>Anthropic API key</h3>
-            <p className="subtle">Used only from the app’s background process. It never reaches this window.</p>
+            <h3>{t("settings.apiKey.title")}</h3>
+            <p className="subtle">{t("settings.apiKey.body")}</p>
+            {key.data?.needsReentry && !configured && <div className="msg err block" role="status">{t("settings.needsReentry")}</div>}
             {configured && !replace ? (
               <div className="key-row">
                 <code className="masked">{key.data?.masked ?? "••••••••"}</code>
-                <button className="btn" onClick={() => setReplace(true)}>Replace</button>
-                <button className="btn danger-text" onClick={async () => { await call("apiKey.clear"); setKeyMsg(null); key.reload(); }}>Clear</button>
+                <button className="btn" onClick={() => setReplace(true)}>{t("common.replace")}</button>
+                <button className="btn danger-text" onClick={async () => { await call("apiKey.clear"); setKeyMsg(null); key.reload(); }}>{t("common.clear")}</button>
               </div>
             ) : (
               <form className="key-row" onSubmit={(e) => { e.preventDefault(); if (keyInput.trim()) void saveKey(); }}>
-                <input type="password" autoComplete="off" spellCheck={false} placeholder="sk-ant-…" value={keyInput} onChange={(e) => setKeyInput(e.target.value)} aria-label="API key" />
-                <button className="btn primary" type="submit" disabled={keyBusy || !keyInput.trim()}>{keyBusy ? "Checking…" : "Save"}</button>
-                {replace && <button className="btn ghost" type="button" onClick={() => { setReplace(false); setKeyInput(""); }}>Cancel</button>}
+                <input type="password" autoComplete="off" spellCheck={false} placeholder="sk-ant-…" value={keyInput} onChange={(e) => setKeyInput(e.target.value)} aria-label={t("settings.apiKey.aria")} />
+                <button className="btn primary" type="submit" disabled={keyBusy || !keyInput.trim()}>{keyBusy ? t("common.checking") : t("common.save")}</button>
+                {replace && <button className="btn ghost" type="button" onClick={() => { setReplace(false); setKeyInput(""); }}>{t("common.cancel")}</button>}
               </form>
             )}
             {keyMsg && <div className={`msg ${keyMsg.tone} block`} role="status">{keyMsg.text}</div>}
           </section>
 
           <section className="card">
-            <h3>Travel time (OpenRouteService)</h3>
-            <p className="subtle">
-              Free account at openrouteservice.org, then copy the API key from the dashboard. Car travel time without traffic. Free plan quotas are enough for normal use.
-            </p>
+            <h3>{t("settings.ors.title")}</h3>
+            <p className="subtle">{t("settings.ors.body")}</p>
+            {ors.data?.needsReentry && !orsConfigured && <div className="msg err block" role="status">{t("settings.needsReentry")}</div>}
             {orsConfigured && !orsReplace ? (
               <div className="key-row">
                 <code className="masked">{ors.data?.masked ?? "••••••••"}</code>
-                <button className="btn" onClick={() => setOrsReplace(true)}>Replace</button>
-                <button className="btn danger-text" onClick={async () => { await call("orsKey.clear"); setOrsMsg(null); setRecompute(null); ors.reload(); }}>Clear</button>
+                <button className="btn" onClick={() => setOrsReplace(true)}>{t("common.replace")}</button>
+                <button className="btn danger-text" onClick={async () => { await call("orsKey.clear"); setOrsMsg(null); setRecompute(null); ors.reload(); }}>{t("common.clear")}</button>
               </div>
             ) : (
               <form className="key-row" onSubmit={(e) => { e.preventDefault(); if (orsInput.trim()) void saveOrsKey(); }}>
-                <input type="password" autoComplete="off" spellCheck={false} placeholder="OpenRouteService API key" value={orsInput} onChange={(e) => setOrsInput(e.target.value)} aria-label="OpenRouteService API key" />
-                <button className="btn primary" type="submit" disabled={orsBusy || !orsInput.trim()}>{orsBusy ? "Checking…" : "Save"}</button>
-                {orsReplace && <button className="btn ghost" type="button" onClick={() => { setOrsReplace(false); setOrsInput(""); }}>Cancel</button>}
+                <input type="password" autoComplete="off" spellCheck={false} placeholder={t("settings.ors.placeholder")} value={orsInput} onChange={(e) => setOrsInput(e.target.value)} aria-label={t("settings.ors.placeholder")} />
+                <button className="btn primary" type="submit" disabled={orsBusy || !orsInput.trim()}>{orsBusy ? t("common.checking") : t("common.save")}</button>
+                {orsReplace && <button className="btn ghost" type="button" onClick={() => { setOrsReplace(false); setOrsInput(""); }}>{t("common.cancel")}</button>}
               </form>
             )}
             {orsMsg && <div className={`msg ${orsMsg.tone} block`} role="status">{orsMsg.text}</div>}
-            <Row label="Recompute all travel times" hint="Looks up your home and every open vacancy again. Uses a few routing requests.">
+            <Row label={t("settings.recompute.label")} hint={t("settings.recompute.hint")}>
               <span className="recompute">
                 {recompute && <span className={`msg ${recompute.tone}`} role="status">{recompute.text}</span>}
-                <button className="btn" disabled={recomputing || !orsConfigured} onClick={runRecompute}>{recomputing ? "Recomputing…" : "Recompute"}</button>
+                <button className="btn" disabled={recomputing || !orsConfigured} onClick={runRecompute}>{recomputing ? t("settings.recompute.busy") : t("settings.recompute.button")}</button>
               </span>
             </Row>
           </section>
 
           <section className="card">
-            <h3>Models</h3>
-            <Row label="Scoring model" hint={MODEL_PRICE[s.scoringModel]}>
-              <select value={s.scoringModel} aria-label="Scoring model" onChange={(e) => patch({ scoringModel: e.target.value as ModelId })}>
-                {MODELS.map((m) => <option key={m.id} value={m.id}>{m.label} · {m.note}</option>)}
+            <h3>{t("settings.models.title")}</h3>
+            <Row label={t("settings.scoringModel")} hint={price(s.scoringModel)}>
+              <select value={s.scoringModel} aria-label={t("settings.scoringModel")} onChange={(e) => patch({ scoringModel: e.target.value as ModelId })}>
+                {MODELS.map((m) => <option key={m.id} value={m.id}>{m.label} · {t(`model.note.${m.id}`)}</option>)}
               </select>
             </Row>
-            <Row label="Utility model" hint={<>{MODEL_PRICE[s.utilityModel]}. Page layouts, listing fallback, PDF import.</>}>
-              <select value={s.utilityModel} aria-label="Utility model" onChange={(e) => patch({ utilityModel: e.target.value as ModelId })}>
-                {MODELS.map((m) => <option key={m.id} value={m.id}>{m.label} · {m.note}</option>)}
+            <Row label={t("settings.utilityModel")} hint={t("settings.utilityHint", { price: price(s.utilityModel) })}>
+              <select value={s.utilityModel} aria-label={t("settings.utilityModel")} onChange={(e) => patch({ utilityModel: e.target.value as ModelId })}>
+                {MODELS.map((m) => <option key={m.id} value={m.id}>{m.label} · {t(`model.note.${m.id}`)}</option>)}
               </select>
             </Row>
-            <Row label="Thinking effort" hint="Higher effort reasons longer and costs more.">
-              <Segmented<Effort> label="Effort" value={s.effort} onChange={(v) => patch({ effort: v })} options={[{ id: "low", label: "Low" }, { id: "medium", label: "Medium" }, { id: "high", label: "High" }]} />
+            <Row label={t("settings.effort")} hint={t("settings.effortHint")}>
+              <Segmented<Effort> label={t("settings.effortAria")} value={s.effort} onChange={(v) => patch({ effort: v })} options={[{ id: "low", label: t("effort.low") }, { id: "medium", label: t("effort.medium") }, { id: "high", label: t("effort.high") }]} />
             </Row>
-            <Row label="Output language" hint="Summaries, reasons and gaps.">
-              <Segmented<OutputLanguage> label="Language" value={s.outputLanguage} onChange={(v) => patch({ outputLanguage: v })} options={[{ id: "en", label: "English" }, { id: "nl", label: "Nederlands" }]} />
-            </Row>
-          </section>
-
-          <section className="card">
-            <h3>Scanning</h3>
-            <Row label="Scan interval" hint="Sources can override this individually.">
-              <NumberField label="Scan interval in hours" value={s.scanIntervalHours} min={0.25} step={0.25} suffix="hours" onCommit={(n) => patch({ scanIntervalHours: n })} />
-            </Row>
-            <Row label="New vacancies scored per scan" hint="Per source. The rest are marked skipped and can be scored by hand.">
-              <NumberField label="Max new scored per scan" value={s.maxNewScoredPerScan} min={1} max={200} onCommit={(n) => patch({ maxNewScoredPerScan: n })} />
-            </Row>
-            <Row label="Close after missed scans" hint="A vacancy that is no longer listed is marked closed after this many scans.">
-              <NumberField label="Close after missed scans" value={s.closeAfterMissedScans} min={1} max={20} onCommit={(n) => patch({ closeAfterMissedScans: n })} />
-            </Row>
-            <Row label="Launch at login">
-              <Switch label="Launch at login" checked={s.launchAtLogin} onChange={(v) => patch({ launchAtLogin: v })} />
+            <Row label={t("lang.switch")} hint={t("settings.language.hint")}>
+              <Segmented<OutputLanguage> label={t("lang.label")} value={lang} onChange={(v) => { setLang(v); setS((cur) => ({ ...cur, outputLanguage: v })); }} options={[{ id: "en", label: t("lang.en") }, { id: "nl", label: t("lang.nl") }]} />
             </Row>
           </section>
 
           <section className="card">
-            <h3>Notifications</h3>
-            <Row label="Notify me about strong matches">
-              <Switch label="Notifications" checked={s.notificationsEnabled} onChange={(v) => patch({ notificationsEnabled: v })} />
+            <h3>{t("settings.scanning.title")}</h3>
+            <Row label={t("settings.interval")} hint={t("settings.intervalHint")}>
+              <NumberField label={t("settings.intervalAria")} value={s.scanIntervalHours} min={0.25} step={0.25} suffix={t("common.hoursUnit")} onCommit={(n) => patch({ scanIntervalHours: n })} />
             </Row>
-            <Row label="Minimum score to notify" hint="Knockouts never notify.">
-              <NumberField label="Notify threshold" value={s.notifyThreshold} min={0} max={100} step={5} onCommit={(n) => patch({ notifyThreshold: n })} />
+            <Row label={t("settings.maxNew")} hint={t("settings.maxNewHint")}>
+              <NumberField label={t("settings.maxNewAria")} value={s.maxNewScoredPerScan} min={1} max={200} onCommit={(n) => patch({ maxNewScoredPerScan: n })} />
+            </Row>
+            <Row label={t("settings.closeAfter")} hint={t("settings.closeAfterHint")}>
+              <NumberField label={t("settings.closeAfter")} value={s.closeAfterMissedScans} min={1} max={20} onCommit={(n) => patch({ closeAfterMissedScans: n })} />
+            </Row>
+            <Row label={t("settings.launch")}>
+              <Switch label={t("settings.launch")} checked={s.launchAtLogin} onChange={(v) => patch({ launchAtLogin: v })} />
             </Row>
           </section>
 
           <section className="card">
-            <h3>Usage and budget</h3>
-            <Row label="Monthly budget" hint="Scoring pauses when the month’s spend reaches this.">
-              <NumberField label="Monthly budget in USD" value={s.monthlyBudgetUsd} min={0} step={1} suffix="USD" onCommit={(n) => patch({ monthlyBudgetUsd: n })} />
+            <h3>{t("settings.notifications.title")}</h3>
+            <Row label={t("settings.notify")}>
+              <Switch label={t("settings.notifyAria")} checked={s.notificationsEnabled} onChange={(v) => patch({ notificationsEnabled: v })} />
+            </Row>
+            <Row label={t("settings.threshold")} hint={t("settings.thresholdHint")}>
+              <NumberField label={t("settings.thresholdAria")} value={s.notifyThreshold} min={0} max={100} step={5} onCommit={(n) => patch({ notifyThreshold: n })} />
+            </Row>
+          </section>
+
+          <section className="card">
+            <h3>{t("settings.usage.title")}</h3>
+            <Row label={t("settings.budget")} hint={t("settings.budgetHint")}>
+              <NumberField label={t("settings.budgetAria")} value={s.monthlyBudgetUsd} min={0} step={1} suffix="USD" onCommit={(n) => patch({ monthlyBudgetUsd: n })} />
             </Row>
             {u && (
               <div className="usage">
                 <div className="usage-head">
-                  <div><b className="usage-big">{usd(u.monthUsd)}</b> <span className="subtle">of {usd(u.budgetUsd)} this month</span></div>
-                  {u.budgetExceeded && <span className="level l-error">Budget reached</span>}
+                  <div><b className="usage-big">{fmt.usd(u.monthUsd)}</b> <span className="subtle">{t("settings.usage.of", { budget: fmt.usd(u.budgetUsd) })}</span></div>
+                  {u.budgetExceeded && <span className="level l-error">{t("status.budgetShort")}</span>}
                 </div>
                 <Bar value={pct} tone={u.budgetExceeded ? "knockout" : pct > 80 ? "possible" : "strong"} />
                 {u.byPurpose.length > 0 && (
@@ -248,19 +253,19 @@ export function SettingsView({ shared }: { shared: Shared }) {
                     <tbody>
                       {u.byPurpose.map((p) => (
                         <tr key={p.purpose}>
-                          <td>{PURPOSE_LABEL[p.purpose] ?? p.purpose}</td>
-                          <td className="subtle num">{p.calls} {p.calls === 1 ? "call" : "calls"}</td>
-                          <td className="num" style={{ width: 80 }}>{usd(p.usd)}</td>
+                          <td>{(PURPOSES as readonly string[]).includes(p.purpose) ? t(`purpose.${p.purpose as (typeof PURPOSES)[number]}`) : p.purpose}</td>
+                          <td className="subtle num">{t("settings.usage.calls", { count: p.calls })}</td>
+                          <td className="num" style={{ width: 80 }}>{fmt.usd(p.usd)}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 )}
                 {u.last30Days.length > 0 && (
-                  <div className="days" aria-label="Spend per day, last 30 days">
+                  <div className="days" aria-label={t("settings.usage.daysAria")}>
                     <div className="days-bars">
                       {u.last30Days.map((d) => (
-                        <div key={d.day} className="day" title={`${d.day}: ${usd(d.usd)}`}>
+                        <div key={d.day} className="day" title={`${d.day}: ${fmt.usd(d.usd)}`}>
                           <div style={{ height: `${Math.max(4, (d.usd / maxDay) * 100)}%` }} />
                         </div>
                       ))}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import type { Bucket, VacancyListItem } from "../../shared/types";
-import { BUCKET_LABEL, STATE_LABEL } from "../util";
+import { useT } from "../i18n";
 
 const PATHS: Record<string, string> = {
   inbox: "M3 13l2.5-7.5A2 2 0 017.4 4h9.2a2 2 0 011.9 1.5L21 13v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5zm0 0h5l1 2h6l1-2h5",
@@ -48,17 +48,19 @@ export function Icon({ name, size = 16 }: { name: keyof typeof PATHS | string; s
 }
 
 export function ScorePill({ item }: { item: Pick<VacancyListItem, "score" | "bucket" | "scoreState"> }) {
+  const { t } = useT();
   if (item.score != null && item.bucket) {
+    const label = t(`bucket.${item.bucket}`);
     return (
-      <span className={`pill b-${item.bucket}`} title={`Score ${item.score}, ${BUCKET_LABEL[item.bucket]}`}>
+      <span className={`pill b-${item.bucket}`} title={t("score.title", { score: item.score, bucket: label })}>
         <b>{item.score}</b>
-        <span>{BUCKET_LABEL[item.bucket]}</span>
+        <span>{label}</span>
       </span>
     );
   }
   return (
     <span className={`pill s-${item.scoreState}`}>
-      <span>{STATE_LABEL[item.scoreState]}</span>
+      <span>{t(`state.${item.scoreState}`)}</span>
     </span>
   );
 }
@@ -94,6 +96,7 @@ export function Segmented<T extends string>({
 }
 
 export function Modal({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer: ReactNode }) {
+  const { t } = useT();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
@@ -116,7 +119,7 @@ export function Modal({ title, onClose, children, footer }: { title: string; onC
       <div className="modal" role="dialog" aria-modal="true" aria-label={title} ref={ref}>
         <header className="modal-head">
           <h2>{title}</h2>
-          <button className="btn icon-only ghost" onClick={onClose} aria-label="Close">
+          <button className="btn icon-only ghost" onClick={onClose} aria-label={t("common.close")}>
             <Icon name="close" />
           </button>
         </header>

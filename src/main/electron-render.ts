@@ -1,4 +1,5 @@
 import { BrowserWindow, type Session, type WebFrameMain } from "electron";
+import { tEn, type Translator } from "../shared/i18n";
 import { USER_AGENT } from "../core/net/fetcher";
 import { inlineFrames } from "../core/extract/frames";
 import { NON_CONTENT_FRAME_HOSTS, matchesHostList, type PageRenderer, type RenderedFrame } from "../core/net/render";
@@ -89,8 +90,11 @@ export class ElectronRenderer implements PageRenderer {
   private renders = 0;
   private chain: Promise<unknown> = Promise.resolve();
 
+  /** `t` is resolved on every error so a language switch applies immediately (default English). */
+  constructor(private readonly t: Translator = tEn) {}
+
   render(url: string): Promise<{ url: string; html: string; frames?: RenderedFrame[] }> {
-    if (!isHttp(url)) return Promise.reject(new Error(`Refusing to render non-http(s) URL: ${url}`));
+    if (!isHttp(url)) return Promise.reject(new Error(this.t("render.refusing", { url })));
     const run = this.chain.then(
       () => this.renderOnce(url),
       () => this.renderOnce(url),
@@ -207,7 +211,7 @@ export class ElectronRenderer implements PageRenderer {
       let stable = 0;
       while (Date.now() - started < MAX_MS) {
         await sleep(POLL_MS);
-        if (win.isDestroyed()) throw new Error("Render window was closed");
+        if (win.isDestroyed()) throw new Error(this.t("render.closed"));
         const sig = await this.signature(wc);
         stable = sig === last ? stable + 1 : 0;
         last = sig;
@@ -217,7 +221,7 @@ export class ElectronRenderer implements PageRenderer {
     } catch (e) {
       // A broken window is not reused.
       this.dispose();
-      throw new Error(`Render failed for ${url}: ${e instanceof Error ? e.message : String(e)}`);
+      throw new Error(this.t("render.failed", { url, error: e instanceof Error ? e.message : String(e) }));
     }
   }
 }

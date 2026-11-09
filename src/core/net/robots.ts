@@ -1,4 +1,5 @@
 import robotsParser from "robots-parser";
+import { tEn, type Translator } from "../../shared/i18n";
 
 export interface RobotsLoadResult {
   status: number;
@@ -10,6 +11,7 @@ export interface RobotsCacheOptions {
   now?: () => number;
   userAgent?: string; // robots.txt product token
   onWarn?: (message: string) => void;
+  t?: Translator;
 }
 
 type Robots = ReturnType<typeof robotsParser>;
@@ -29,11 +31,17 @@ export class RobotsCache {
   private readonly now: () => number;
   private readonly userAgent: string;
   private readonly onWarn: (message: string) => void;
+  private readonly opts: RobotsCacheOptions;
+
+  private get t(): Translator {
+    return this.opts.t ?? tEn;
+  }
 
   constructor(
     private readonly load: (robotsUrl: string) => Promise<RobotsLoadResult>,
     opts: RobotsCacheOptions = {},
   ) {
+    this.opts = opts;
     this.ttlMs = opts.ttlMs ?? 24 * 60 * 60 * 1000;
     this.now = opts.now ?? Date.now;
     this.userAgent = opts.userAgent ?? "VacatureRadar";
@@ -72,10 +80,10 @@ export class RobotsCache {
       if (res.status >= 200 && res.status < 300) {
         robots = robotsParser(robotsUrl, res.body);
       } else if (res.status >= 500) {
-        this.onWarn(`robots.txt at ${origin} returned ${res.status}; treating as allowed`);
+        this.onWarn(this.t("robots.status", { origin, status: res.status }));
       }
     } catch (e) {
-      this.onWarn(`robots.txt at ${origin} unreachable (${e instanceof Error ? e.message : String(e)}); treating as allowed`);
+      this.onWarn(this.t("robots.unreachable", { origin, error: e instanceof Error ? e.message : String(e) }));
     }
     const entry = { at: this.now(), robots };
     this.cache.set(origin, entry);

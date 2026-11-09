@@ -1202,7 +1202,22 @@ VAIA Talents), so the fix is generic.
 | Hours any/full-time/part-time; contract permanent/temporary/replacement/freelance | Maakt niet uit/Voltijds/Deeltijds; Vast/Tijdelijk/Vervanging/Freelance |
 | Desired roles, Ambitions, Deal-breakers, Salary notes, Include keywords, Exclude keywords | Gewenste functies, Ambities, Uitsluitingscriteria, Loonwensen, Verplichte trefwoorden, Uitsluitende trefwoorden |
 | 5 new strong matches | 5 nieuwe sterke matches |
-| Open vacature-zoeker | vacature-zoeker openen |
+| Open Vacature Radar | Vacature Radar openen |
+
+
+**As built (17.2):**
+- Keys live in `src/shared/i18n/{en,nl}.ts` (`nl` is typed `Record<keyof typeof en, string>`); `{app}` defaults to `APP_NAME`. `translate`, `translatorFor(getLang)`,
+  `tEn`, `formatDate/Time/DateTime/Number/Usd/Relative` are in `src/shared/i18n/index.ts`; relative times use `rel.*` keys ("5 min geleden", "over 2 u").
+  `test/i18n.test.ts` checks key parity, placeholder parity, plural pairs, no em dash, glossary spot checks and the formatters.
+- Core/main take an optional `t?: Translator` (default English, so tests stay English): ScanService, TravelService, RadarService, OrsClient,
+  AnthropicLlmClient, PoliteFetcher (+ robots), ElectronRenderer, `diagnosePage({ t })`, `prefilter(item, prefs, t)`, `linkedinZipToMarkdown(buf, t)`,
+  `statusLine(s, name, t)`, `formatTravel(v, lang)`. Main builds `t = translatorFor(() => db.getSettings().outputLanguage)` and, on `outputLanguage`
+  changes, rebuilds the application menu (`buildAppMenu`, keys `menu.*`) and the tray.
+- Renderer: `src/renderer/i18n.tsx` (`I18nProvider`, `useT()` returning `{ t, lang, setLang, fmt }`); the sidebar footer has an "EN | NL" segmented control and a
+  small "Vacature Radar" wordmark sits under the traffic-light inset. The mock keeps log lines as keys and renders them per language; fake AI explanations
+  switch to Dutch when the language is Dutch (as if re-scored).
+- Glossary adaptations: Strategy values are shown with the labels RSS-feed / Gestructureerde data / Paginapatroon / AI-extractie (EN: RSS feed / JSON-LD /
+  Recipe / AI extraction); "Render mode" is "Weergave"; "Include/Exclude keywords" are "Verplichte trefwoorden" / "Uitsluitende trefwoorden (in de titel)".
 
 ### 17.3 Socius source (seed revision 3)
 

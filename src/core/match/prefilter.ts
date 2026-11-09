@@ -1,4 +1,5 @@
 import type { Preferences } from "../../shared/types";
+import { tEn, type Translator } from "../../shared/i18n";
 
 function norm(s: string): string {
   return s
@@ -21,17 +22,18 @@ function matcher(keyword: string): RegExp | null {
 export function prefilter(
   item: { title: string; snippet: string },
   prefs: Pick<Preferences, "includeKeywords" | "excludeKeywords">,
+  t: Translator = tEn,
 ): { pass: true } | { pass: false; reason: string } {
   const title = norm(item.title);
   for (const kw of prefs.excludeKeywords) {
     const m = matcher(kw);
-    if (m && m.test(title)) return { pass: false, reason: `Title contains excluded keyword "${kw.trim()}"` };
+    if (m && m.test(title)) return { pass: false, reason: t("prefilter.excluded", { keyword: kw.trim() }) };
   }
   const includes = prefs.includeKeywords.filter((k) => matcher(k));
   if (includes.length > 0) {
     const hay = title + " " + norm(item.snippet);
     if (!includes.some((k) => matcher(k)!.test(hay))) {
-      return { pass: false, reason: "Title/snippet contains none of the include keywords" };
+      return { pass: false, reason: t("prefilter.noInclude") };
     }
   }
   return { pass: true };

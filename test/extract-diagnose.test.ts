@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { diagnosePage } from "../src/core/extract/diagnose";
 import { findPortals } from "../src/core/extract/portals";
 import { fixture } from "./helpers";
+import { translatorFor } from "../src/shared/i18n";
 
 const URL_ = "https://www.zorgneticuro.be/content/overzicht-jobs";
 const HTML = fixture("zorgneticuro_list.html");
@@ -151,5 +152,16 @@ describe("diagnosePage portal hint", () => {
   it("has no portals and no portal hint on pages without portal links", () => {
     const d = diagnosePage({ ...fiola, html: "<html><body>" + "<p>text text text</p>".repeat(60) + "</body></html>", llmUsed: false });
     expect(d.portals).toEqual([]);
+  });
+});
+
+describe("diagnosePage in Dutch", () => {
+  const t = translatorFor(() => "nl");
+  it("translates the hints", () => {
+    expect(diagnosePage({ ...base, t }).hint).toMatch(/Deze pagina laadt inhoud van .*widgets\.example-ats\.test.*Browser/);
+    expect(diagnosePage({ ...base, html: "<html><body>x</body></html>", t }).hint).toMatch(/bijna leeg/);
+    const text = `<html><body><p>${"vacancy text ".repeat(60)}</p></body></html>`;
+    expect(diagnosePage({ ...base, html: text, llmAvailable: false, t }).hint).toMatch(/Anthropic API-sleutel/);
+    expect(diagnosePage({ ...base, html: text, llmUsed: true, t }).hint).toMatch(/Claude heeft de pagina bekeken/);
   });
 });

@@ -12,6 +12,7 @@ import { TravelService } from "../src/core/geo/travel";
 import { ScanService } from "../src/core/scan/scanner";
 import type { RadarEvents } from "../src/shared/ipc";
 import type { Recipe, SourceInput } from "../src/shared/types";
+import { translatorFor, type Lang } from "../src/shared/i18n";
 import { VDAB_RECIPE, VDAB_URL, VVSG_RECIPE, VVSG_URL, fixture } from "./helpers";
 
 const VVSG_HTML = fixture("vvsg_list.html");
@@ -92,7 +93,7 @@ interface Env {
   addSource(over?: Partial<SourceInput> & { recipe?: Recipe | null }): number;
 }
 
-function mk(opts: { llm?: boolean; profile?: boolean; renderer?: boolean; travel?: (store: Store) => { computeFor(ids?: number[]): Promise<unknown> } } = {}): Env {
+function mk(opts: { lang?: Lang; llm?: boolean; profile?: boolean; renderer?: boolean; travel?: (store: Store) => { computeFor(ids?: number[]): Promise<unknown> } } = {}): Env {
   const store = new Store(":memory:");
   if (opts.profile !== false) store.saveProfile({ markdown: "I am a social worker.", preferences: store.getProfile().preferences });
   const routes = new Map<string, string>();
@@ -122,7 +123,8 @@ function mk(opts: { llm?: boolean; profile?: boolean; renderer?: boolean; travel
             return { url, html, frames: renderFrames.get(url) };
           },
         };
-  const fetcher = new PoliteFetcher(raw, { minIntervalMs: 0, sleep: async () => {} });
+  const tr = translatorFor(() => opts.lang ?? store.getSettings().outputLanguage);
+  const fetcher = new PoliteFetcher(raw, { minIntervalMs: 0, sleep: async () => {}, t: tr });
   const llm = new FakeLlm();
   const notes: Env["notes"] = [];
   const events: string[] = [];
@@ -137,6 +139,7 @@ function mk(opts: { llm?: boolean; profile?: boolean; renderer?: boolean; travel
     now: () => new Date(t),
     emit: <E extends keyof RadarEvents>(e: E) => void events.push(e),
     travel: opts.travel?.(store),
+    t: tr,
   });
   routes.set(VVSG_URL, VVSG_HTML);
   return {
@@ -751,5 +754,31 @@ describe("ScanService travel integration", () => {
     const v = rows(e)[0];
     await e.scanner.scoreOne(v.id);
     expect(calls).toEqual([[v.id]]);
+  });
+});
+
+describe("ScanService in Dutch", () => {
+  it("writes the source error and the scan log in the current language", async () => {
+    const e = mk({ lang: "nl" });
+    e.routes.set("https://www.vvsg.be/robots.txt", "User-agent: *\nDisallow: /");
+    const id = e.addSource();
+    await e.scanner.scanSource(id);
+    expect(e.store.getSource(id)!.lastError).toBe("Geblokkeerd door robots.txt");
+    expect(e.store.listLog(20).some((l) => l.message === "Scan gestart")).toBe(true);
+    expect((await e.scanner.testSource({ url: VVSG_URL, renderMode: "static", maxPages: 1 })).error).toBe("Geblokkeerd door robots.txt");
+  });
+
+  it("follows the setting at call time and reports HTTP errors and finished scans in Dutch", async () => {
+    const e = mk();
+    e.store.saveSettings({ outputLanguage: "nl" });
+    const bad = e.addSource({ name: "Bad", url: "https://bad.example/jobs" });
+    await e.scanner.scanSource(bad);
+    expect(e.store.getSource(bad)!.lastError).toBe("HTTP 500 voor https://bad.example/jobs");
+    const ok = e.addSource();
+    await e.scanner.scanSource(ok);
+    expect(e.store.listLog(50).some((l) => /Scan klaar: \d+ gevonden, \d+ nieuw, \d+ beoordeeld/.test(l.message))).toBe(true);
+    e.store.saveSettings({ outputLanguage: "en" });
+    await e.scanner.scanSource(ok);
+    expect(e.store.listLog(50).some((l) => /Scan finished: \d+ found/.test(l.message))).toBe(true);
   });
 });

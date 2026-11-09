@@ -2,9 +2,10 @@ import type { RadarEvents } from "../../shared/ipc";
 import type { PageDiagnostics, RenderMode, Settings, Source, SourceTestResult, ExtractStrategy, ListingItem, Recipe } from "../../shared/types";
 import type { Store, VacancyRow } from "../db/store";
 import type { PoliteFetcher } from "../net/fetcher";
-import { NO_KEY_HINT, diagnosePage } from "../extract/diagnose";
+import { diagnosePage } from "../extract/diagnose";
 import type { PageRenderer } from "../net/render";
 import type { Notifier } from "../notify";
+import { tEn, type Translator } from "../../shared/i18n";
 import { BudgetExceededError, LlmNotConfiguredError, type LlmClient, type LlmUsage } from "../llm/client";
 import { llmExtractListing } from "../llm/extract-llm";
 import { learnRecipe } from "../llm/recipe-learn";
@@ -31,6 +32,8 @@ export interface ScanDeps {
   llmConfigured?: () => boolean;
   /** Travel-time computation (optional; absent in contexts without routing). */
   travel?: { computeFor(ids?: number[]): Promise<unknown> };
+  /** Translator for log lines, stored errors and notifications, resolved at call time (default English). */
+  t?: Translator;
 }
 
 type Mode = "static" | "browser";
@@ -69,6 +72,10 @@ export class ScanService {
   private statusListener: (() => void) | null = null;
 
   constructor(private readonly deps: ScanDeps) {}
+
+  private get t(): Translator {
+    return this.deps.t ?? tEn;
+  }
 
   /** Registers a callback invoked whenever `status` may have changed. */
   setStatusListener(fn: (() => void) | null): void {
@@ -141,12 +148,12 @@ export class ScanService {
   private noItemsMessage(settings: Settings): string {
     const { llm, llmConfigured } = this.deps;
     if (!llm || (llmConfigured && !llmConfigured())) {
-      return "No vacancies found. Add an Anthropic API key so Claude can learn this page's layout.";
+      return this.t("scan.noItems.noKey");
     }
     if (this.budgetExceeded(settings)) {
-      return "No vacancies found, and the monthly budget is reached, so Claude could not learn this page's layout.";
+      return this.t("scan.noItems.budget");
     }
-    return "No vacancies found on the page";
+    return this.t("scan.noItems.plain");
   }
 
   private llmUsable(settings: Settings): LlmClient | null {
@@ -159,7 +166,7 @@ export class ScanService {
 
   private async loadPage(url: string, mode: Mode): Promise<PageLoad> {
     if (mode === "browser") {
-      if (!this.deps.renderer) throw new Error("Browser rendering is not available here");
+      if (!this.deps.renderer) throw new Error(this.t("scan.noBrowser"));
       await this.deps.fetcher.throttle(url);
       const r = await this.deps.renderer.render(url);
       return { html: r.html, contentType: "text/html", url: r.url || url, frames: r.frames };
@@ -248,7 +255,7 @@ export class ScanService {
         try {
           cur = await this.loadPage(next, mode);
         } catch (e) {
-          this.log("warn", `Pagination stopped at ${next}: ${errMsg(e)}`);
+          this.log("warn", this.t("scan.paginationStopped", { url: next, error: errMsg(e) }));
           break;
         }
         const more = applyRecipe(cur.html, cur.url, res.recipe).filter((i) => !seen.has(i.url));
@@ -282,9 +289,10 @@ export class ScanService {
       itemCount: out.items.length,
       itemUrls: out.items.map((i) => i.url),
       llmAvailable,
+      t: this.t,
     });
     // The generic no-key hint is replaced by the existing no-key/budget messages (which know about the budget).
-    const message = diagnostics.hint === null || diagnostics.hint === NO_KEY_HINT ? this.noItemsMessage(settings) : diagnostics.hint;
+    const message = diagnostics.hint === null || diagnostics.hint === this.t("diag.noKey") ? this.noItemsMessage(settings) : diagnostics.hint;
     if (out.items.length === 0 && diagnostics.hint !== null) diagnostics.hint = message;
     return { diagnostics, message };
   }
@@ -306,12 +314,12 @@ export class ScanService {
       await this.doScan(source);
     } catch (e) {
       // doScan handles its own errors; this is the last line of defence for the queue.
-      this.log("error", `Scan crashed: ${errMsg(e)}`, sourceId);
+      this.log("error", this.t("scan.crashed", { error: errMsg(e) }), sourceId);
     }
     try {
       const closed = this.deps.store.closeExpired(this.deps.now().toISOString().slice(0, 10));
       if (closed.length > 0) {
-        this.log("info", `${closed.length} vacancies past their deadline were closed`, sourceId);
+        this.log("info", this.t("scan.pastDeadline", { count: closed.length }), sourceId);
         this.deps.emit("vacancies.changed", { newIds: [] });
       }
     } catch {
@@ -327,7 +335,7 @@ export class ScanService {
     const sourceId = source.id;
     const now = this.deps.now();
     const nowIso = now.toISOString();
-    this.log("info", "Scan started", sourceId);
+    this.log("info", this.t("scan.started"), sourceId);
 
     const fail = (message: string, status: "error" | "empty" = "error"): void => {
       try {
@@ -350,7 +358,7 @@ export class ScanService {
     try {
       // 2. robots
       if (!(await fetcher.isAllowed(source.url))) {
-        fail("Blocked by robots.txt");
+        fail(this.t("scan.blockedRobots"));
         return;
       }
       // 3-5. load + extract
@@ -381,7 +389,7 @@ export class ScanService {
           lastError: null,
           detectedMode: outcome.detectedMode ?? source.detectedMode,
         });
-        this.log("info", "Page unchanged since last LLM extraction; skipped LLM tiers", sourceId);
+        this.log("info", this.t("scan.pageUnchanged"), sourceId);
         this.deps.emit("sources.changed", {});
         return;
       }
@@ -418,7 +426,7 @@ export class ScanService {
 
       // 8. missed / closing (only reached after a successful extraction)
       const closed = store.markMissed(sourceId, seenIds, settings.closeAfterMissedScans, now);
-      if (closed.length > 0) this.log("info", `${closed.length} vacancies no longer listed were closed`, sourceId);
+      if (closed.length > 0) this.log("info", this.t("scan.noLongerListed", { count: closed.length }), sourceId);
 
       // 9. prefilter + detail
       const prefs = store.getProfile().preferences;
@@ -426,7 +434,7 @@ export class ScanService {
       // fetch and a scoring call); prefiltered-out ones are free and must not starve the cap.
       let budgeted = 0;
       for (const row of fresh) {
-        const pf = prefilter({ title: row.title, snippet: row.snippet }, prefs);
+        const pf = prefilter({ title: row.title, snippet: row.snippet }, prefs, this.t);
         if (!pf.pass) {
           store.setScoreState(row.id, "filtered", { prefilterReason: pf.reason });
           continue;
@@ -469,14 +477,14 @@ export class ScanService {
       this.notifyScored(scoredIds, settings);
       if (scored > 0) this.deps.emit("vacancies.changed", { newIds: [] });
     } catch (e) {
-      this.log("error", `Scoring failed: ${errMsg(e)}`, sourceId);
+      this.log("error", this.t("scan.scoringFailed", { error: errMsg(e) }), sourceId);
     }
 
     // Scoring may have improved locations (geo_state reset to pending): resolve them for display.
     await this.computeTravel();
 
     // 13.
-    this.log("info", `Scan finished: ${found} found, ${newIds.length} new, ${scored} scored`, sourceId);
+    this.log("info", this.t("scan.finished", { found, fresh: newIds.length, scored }), sourceId);
   }
 
   /** Geocodes + computes travel; never throws (ORS problems must not fail a scan). */
@@ -485,7 +493,7 @@ export class ScanService {
     try {
       await this.deps.travel.computeFor(ids);
     } catch (e) {
-      this.log("warn", `Travel time computation failed: ${errMsg(e)}`);
+      this.log("warn", this.t("scan.travelFailed", { error: errMsg(e) }));
     }
   }
 
@@ -493,13 +501,13 @@ export class ScanService {
     const { store, fetcher } = this.deps;
     try {
       if (!(await fetcher.isAllowed(row.url))) {
-        store.setScoreState(row.id, "error", { error: "Blocked by robots.txt" });
+        store.setScoreState(row.id, "error", { error: this.t("scan.blockedRobots") });
         return;
       }
       const page = await this.loadPage(row.url, mode);
       const d = extractDetail(page.html, page.url);
       if (!d.text.trim()) {
-        store.setScoreState(row.id, "error", { error: "No text found on the detail page" });
+        store.setScoreState(row.id, "error", { error: this.t("scan.noDetailText") });
         return;
       }
       store.saveDetail(row.id, d.text, { organization: d.organization, location: d.location, dateText: d.datePosted });
@@ -521,11 +529,11 @@ export class ScanService {
     if (pending.length === 0) return [];
     const profile = store.getProfile();
     let reason: string | null = null;
-    if (!llm || (this.deps.llmConfigured && !this.deps.llmConfigured())) reason = "no API key configured";
-    else if (!profile.markdown.trim()) reason = "profile is empty";
-    else if (this.budgetExceeded(settings)) reason = "monthly budget reached";
+    if (!llm || (this.deps.llmConfigured && !this.deps.llmConfigured())) reason = this.t("scan.reason.noKey");
+    else if (!profile.markdown.trim()) reason = this.t("scan.reason.noProfile");
+    else if (this.budgetExceeded(settings)) reason = this.t("scan.reason.budget");
     if (reason) {
-      if (!quiet) this.log("warn", `Scoring skipped (${reason}); ${pending.length} vacancies stay pending`, sourceId);
+      if (!quiet) this.log("warn", this.t("scan.scoringSkipped", { reason, count: pending.length }), sourceId);
       return [];
     }
     const feedback = this.feedbackHints();
@@ -536,7 +544,7 @@ export class ScanService {
         scored.push(row.id);
       } catch (e) {
         if (e instanceof BudgetExceededError || e instanceof LlmNotConfiguredError) {
-          this.log("warn", `Scoring stopped: ${e.message}`, sourceId);
+          this.log("warn", this.t("scan.scoringStopped", { error: e.message }), sourceId);
           break;
         }
         try {
@@ -544,7 +552,7 @@ export class ScanService {
         } catch {
           /* row gone */
         }
-        this.log("error", `Scoring "${row.title}" failed: ${errMsg(e)}`, sourceId);
+        this.log("error", this.t("scan.scoringItemFailed", { title: row.title, error: errMsg(e) }), sourceId);
       }
     }
     return scored;
@@ -602,12 +610,12 @@ export class ScanService {
         await this.computeTravel();
         const ids = await this.runScoringQueue(settings, null, true);
         if (ids.length > 0) {
-          this.log("info", `Scored ${ids.length} pending vacancies`);
+          this.log("info", this.t("scan.scoredPending", { count: ids.length }));
           this.notifyScored(ids, settings);
           this.deps.emit("vacancies.changed", { newIds: [] });
         }
       } catch (e) {
-        this.log("error", `Scoring failed: ${errMsg(e)}`);
+        this.log("error", this.t("scan.scoringFailed", { error: errMsg(e) }));
       } finally {
         this.scoring = null;
         this.changed();
@@ -640,7 +648,7 @@ export class ScanService {
       }
     } else {
       notifier.notify({
-        title: `${hits.length} new strong matches`,
+        title: this.t("notify.strongMany", { count: hits.length }),
         body: hits
           .slice(0, 3)
           .map((v) => v.title)
@@ -654,14 +662,14 @@ export class ScanService {
   async scoreOne(vacancyId: number): Promise<void> {
     const { store, llm } = this.deps;
     const row = store.getVacancy(vacancyId);
-    if (!row) throw new Error("Vacancy not found");
+    if (!row) throw new Error(this.t("scan.notFound"));
     const settings = store.getSettings();
     if (!llm || (this.deps.llmConfigured && !this.deps.llmConfigured())) {
-      throw new Error("No Anthropic API key configured. Add one in Settings.");
+      throw new Error(this.t("scan.err.noKey"));
     }
     const profile = store.getProfile();
-    if (!profile.markdown.trim()) throw new Error("The profile is empty. Fill in your profile first.");
-    if (this.budgetExceeded(settings)) throw new Error("Monthly budget reached. Raise it in Settings.");
+    if (!profile.markdown.trim()) throw new Error(this.t("scan.err.noProfile"));
+    if (this.budgetExceeded(settings)) throw new Error(this.t("scan.err.budget"));
 
     let current = row;
     if (!current.description) {
@@ -669,7 +677,7 @@ export class ScanService {
       const mode: Mode = source?.renderMode === "browser" ? "browser" : source?.renderMode === "auto" ? (source.detectedMode ?? "static") : "static";
       await this.fetchDetail(current, mode);
       current = store.getVacancy(vacancyId)!;
-      if (!current.description) throw new Error(current.scoreError ?? "Could not fetch the vacancy text");
+      if (!current.description) throw new Error(current.scoreError ?? this.t("scan.err.noFetchText"));
     }
     await this.computeTravel([vacancyId]);
     current = store.getVacancy(vacancyId) ?? current;
@@ -733,7 +741,7 @@ export class ScanService {
     });
     try {
       if (!(await fetcher.isAllowed(input.url))) {
-        return result({ error: "Blocked by robots.txt", robotsAllowed: false });
+        return result({ error: this.t("scan.blockedRobots"), robotsAllowed: false });
       }
       const out = await this.fetchAndExtract({
         url: input.url,

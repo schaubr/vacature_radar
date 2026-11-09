@@ -1,5 +1,7 @@
 import { Menu, nativeImage, Tray } from "electron";
 import type { AppStatus } from "../shared/types";
+import { APP_NAME } from "../shared/app";
+import { tEn, type Translator } from "../shared/i18n";
 
 export interface TrayOptions {
   getStatus: () => AppStatus;
@@ -8,6 +10,8 @@ export interface TrayOptions {
   onOpen: () => void;
   onScanNow: () => void;
   onQuit: () => void;
+  /** Translator bound to the current language (resolved on every refresh). */
+  t?: Translator;
 }
 
 export interface TrayHandle {
@@ -20,32 +24,33 @@ function hhmm(iso: string): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-export function statusLine(s: AppStatus, sourceName: (id: number) => string | null): string {
+export function statusLine(s: AppStatus, sourceName: (id: number) => string | null, t: Translator = tEn): string {
   if (s.scanning) {
     const n = s.currentSourceId !== null ? sourceName(s.currentSourceId) : null;
-    return n ? `Scanning ${n}...` : "Scanning...";
+    return n ? t("tray.scanningSource", { name: n }) : t("tray.scanning");
   }
-  if (s.budgetExceeded) return "Budget reached";
-  if (s.nextScanAt) return `Next scan ${hhmm(s.nextScanAt)}`;
-  return "No sources enabled";
+  if (s.budgetExceeded) return t("tray.budget");
+  if (s.nextScanAt) return t("tray.nextScan", { time: hhmm(s.nextScanAt) });
+  return t("tray.noSources");
 }
 
 export function createTray(o: TrayOptions): TrayHandle {
   const tray = new Tray(nativeImage.createEmpty());
-  tray.setToolTip("Vacature Radar");
+  tray.setToolTip(APP_NAME);
   const refresh = (): void => {
     try {
+      const t = o.t ?? tEn;
       const status = o.getStatus();
       const strong = o.getStrongNew();
       if (process.platform === "darwin") tray.setTitle(strong > 0 ? `◎ ${strong}` : "◎");
       tray.setContextMenu(
         Menu.buildFromTemplate([
-          { label: "Open Vacature Radar", click: o.onOpen },
-          { label: "Scan now", click: o.onScanNow },
+          { label: t("tray.open"), click: o.onOpen },
+          { label: t("tray.scanNow"), click: o.onScanNow },
           { type: "separator" },
-          { label: statusLine(status, o.sourceName), enabled: false },
+          { label: statusLine(status, o.sourceName, t), enabled: false },
           { type: "separator" },
-          { label: "Quit", click: o.onQuit },
+          { label: t("tray.quit"), click: o.onQuit },
         ]),
       );
     } catch {

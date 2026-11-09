@@ -1,4 +1,5 @@
 import { unzipSync } from "fflate";
+import { tEn, type Translator } from "../../shared/i18n";
 import Papa from "papaparse";
 
 type Row = Record<string, string>;
@@ -145,12 +146,12 @@ function renderSection(spec: FileSpec, rows: Row[]): string {
 }
 
 /** Convert a LinkedIn "Get a copy of your data" zip into a markdown profile. */
-export function linkedinZipToMarkdown(buf: Uint8Array): string {
+export function linkedinZipToMarkdown(buf: Uint8Array, t: Translator = tEn): string {
   let files: Record<string, Uint8Array>;
   try {
     files = unzipSync(buf);
   } catch {
-    throw new Error("This file is not a valid zip archive.");
+    throw new Error(t("linkedin.badZip"));
   }
   const byName = new Map<string, Uint8Array>();
   for (const [path, data] of Object.entries(files)) {
@@ -167,9 +168,7 @@ export function linkedinZipToMarkdown(buf: Uint8Array): string {
     if (rows.length) sections.push(renderSection(spec, rows));
   }
   if (!sections.length) {
-    throw new Error(
-      "No LinkedIn profile data found in this zip (expected Profile.csv, Positions.csv, Education.csv or Skills.csv).",
-    );
+    throw new Error(t("linkedin.noData"));
   }
   return ["# LinkedIn profile", "", ...sections].join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
 }
