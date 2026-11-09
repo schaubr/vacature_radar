@@ -1096,3 +1096,39 @@ embedded-service hint, others unchanged.
 
 Zorgnet-Icuro seed source: renderMode "browser" (was auto) and notes "Vacancies come from an embedded Jobat widget. Use Test before enabling."
 Only affects new installs; do not migrate existing rows.
+
+---
+
+## 16. Hosted job portals and seed revisions (added 2026-11-09)
+
+Trigger: the owner asked to add Fiola vzw (`https://fiolavzw.be/vacatures/#vacatures`), whose vacancies live on the
+Belgian ATS **Jobtoolz** (`https://fiola-vzw.jobtoolz.com/nl`, detail pages `https://fiola-vzw.jobtoolz.com/nl/<slug>`,
+confirmed via web search 2026-11-09). Neither host was reachable from the build sandbox, so the markup is unverified.
+Many Flemish social-profit employers use hosted portals (Jobtoolz, Jobat widgets, Recruitee, Homerun, Teamtailor, Starring Jane,
+VAIA Talents), so the fix is generic.
+
+### 16.1 Seed revisions (add new recommended sources to existing installs)
+
+- Each seed entry gets `since: number` (existing seeds: 1). Settings key `seedRevision` (number, not in `Settings` type; store via a
+  new `Store.getMeta(key)` / `setMeta(key, value)` backed by the settings table under a `meta:` prefix, or a small `meta` table).
+- On startup `seedSources(store)`: `rev = meta.seedRevision ?? (sourcesTableEmpty ? 0 : 1)`; insert seeds with `since > rev` whose
+  canonical URL is not already present (compare with `canonicalizeUrl`); then `seedRevision = max(since)`. A seed the owner deleted is
+  therefore never re-added, and a fresh install gets everything.
+- New seed (since 2): name "Fiola vzw (Jobtoolz)", url `https://fiola-vzw.jobtoolz.com/nl`, renderMode "auto", enabled true, no recipe
+  (Claude learns the layout on the first scan), notes "Fiola's vacancies are hosted on Jobtoolz; fiolavzw.be/vacatures shows the same list.
+  Added 2026-11-09, layout not yet verified: check the first scan."
+
+### 16.2 Known hosted portals in diagnostics
+
+- `src/core/extract/portals.ts`: `KNOWN_PORTALS: { name: string; hostSuffix: string }[]` with Jobtoolz (`jobtoolz.com`),
+  Jobat (`jobat.be`), Recruitee (`recruitee.com`), Homerun (`homerun.co`), Teamtailor (`teamtailor.com`), Starring Jane
+  (`starringjane.com`), VAIA Talents (`talents.vaia.com`), Personio (`jobs.personio.de`, `jobs.personio.com`), Workable (`apply.workable.com`).
+  `findPortals(html, pageUrl): { name: string; host: string; sampleUrl: string }[]` scans `a[href]`, `iframe[src]` and `script[src]`
+  (absolute after resolving) for hosts ending in a known suffix that differ from the page host; one entry per host.
+- `PageDiagnostics` gains `portals: { name; host; sampleUrl }[]`. New hint rule, inserted BEFORE rule 2 of 15.2 and applied whenever
+  portals is non-empty and itemCount is 0 OR every extracted item URL is on the page's own host while portal links exist:
+  "Vacancies on this page are hosted on <Name> (<host>). For the most reliable results, add <portal root URL> as a source."
+  The portal root URL is `https://<host>/` plus the first path segment of sampleUrl when it is a 2-letter language code
+  (e.g. `https://fiola-vzw.jobtoolz.com/nl`).
+- UI: when diagnostics.portals is non-empty, the Test panel shows the hint with a button "Add <host> as a source" that pre-fills a new
+  source (name = "<page source name or host> (<Portal name>)", url = portal root URL, renderMode auto) in the Source editor.
