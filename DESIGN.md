@@ -1303,3 +1303,44 @@ Owner request: one package that contains everything and can be dropped on anothe
   first launch via System Settings > Privacy & Security > Open Anyway (or `xattr -dr com.apple.quarantine "/Applications/Vacature Radar.app"`),
   then set up keys and profile. Optional: copy `~/Library/Application Support/Vacature Radar` to the new Mac BEFORE first launch to keep
   vacancies, profile, sources and settings; API keys must be entered again because they are encrypted with the old Mac's Keychain.
+
+---
+
+## 20. Prompt caching: correctness, visibility and a standing check (added 2026-11-11)
+
+Owner request: use the Anthropic API's prompt caching. Findings (from Anthropic's prompt-caching guidance, Nov 2026, and the code):
+- **Scoring already caches** (since 1.0.0): `system` = [role + language (~1,500 tokens), profile + preferences (~1,600 tokens) with
+  `cache_control: {type: "ephemeral"}`]; per-vacancy content (feedback hints + vacancy) is in `messages` after the breakpoint.
+  Scoring runs serially, so each call reads the previous call's entry (start-to-start gaps well under 5 minutes within a scan).
+  The 5-minute TTL stays: 1-hour writes cost 2x and only pay off for 5-60 minute gaps, which scans don't have (they run every 6 hours).
+- **Not cached, on purpose:** recipe learning (system ~460 tokens) and listing extraction (~220 tokens) are below the 512-token minimum
+  for Opus 5.5 / Sonnet 5.5 / Haiku 5.5 (the API silently ignores the marker); the page content differs per call; PDF import is one-off.
+  Adding markers there would only add the 1.25x write premium.
+- Prices: cache reads are 0.05x on Opus 5.5 ($0.20/MTok) and Sonnet 5.5 ($0.10/MTok, the app had $0.20: wrong), ~0.1x elsewhere;
+  writes 1.25x (5-minute) and 2x (1-hour).
+
+Changes:
+1. `llm/pricing.ts`: Sonnet 5.5 `cacheRead` 0.10; add `cacheWrite1h` (2x input: Opus 8.00, Sonnet 4.00, Haiku 0.20). `costUsd` takes optional
+   `cacheWrite1hTokens`; the client reads `usage.cache_creation?.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens` when present and
+   bills each at its own price (falls back to `cache_creation_input_tokens` as 5-minute when the breakdown is absent). Store keeps the total
+   in `cache_write_tokens` (no schema change needed).
+2. Visibility: `UsageSummary.cache` = `{ readTokens, writeTokens, uncachedInputTokens, hitShare (0..1, reads / (reads + writes + uncached input)), savedUsd }`
+   for the current month, where savedUsd = sum over rows of `readTokens * (input - cacheRead) - writeTokens * (cacheWrite - input)` per row's model
+   prices, divided by 1e6 (can be negative early on). Settings usage card shows one line (both languages, i18n keys), e.g.
+   EN "Prompt cache: 81% of prompt tokens served from cache this month, saving about $1.12." /
+   NL "Promptcache: 81% van de prompttokens kwam deze maand uit de cache, een besparing van ongeveer $ 1,12."; when there were no Claude
+   calls this month: EN "No Claude calls yet this month." / NL "Deze maand nog geen Claude-aanroepen.".
+3. Standing check (monitoring on the usage fields, as Anthropic recommends): `AnthropicLlmClient` computes a SHA-256 of the cacheable prefix
+   identity (model + effort + JSON of the system blocks + the output format schema) for requests that contain a cache_control marker,
+   remembers the last start time per prefix hash, and when a request with the same hash started less than 240 s after the previous one
+   comes back with `cache_read_input_tokens === 0`, calls an injected `onCacheMiss({ purpose, model, writeTokens })`. Main logs a translated
+   warning to the Activity log: EN "Prompt cache was not used for a {purpose} call that should have hit it. Claude calls cost more until
+   this is fixed." / NL "De promptcache werd niet gebruikt bij een {purpose}-aanroep die hem had moeten raken. Claude-aanroepen kosten meer
+   tot dit opgelost is." At most one such warning per hour.
+4. Tests: (a) determinism: build the real request params for two different vacancies with the same profile and settings (fake Anthropic
+   capturing params) and assert the `system` arrays are deep-equal and byte-identical as JSON, the last system block carries the only
+   `cache_control`, no ISO date or time pattern appears in any system text, and feedback and vacancy text appear only in `messages`;
+   (b) the miss detector fires on a zero-read second call within 240 s, not on a first call, not after 240 s, not when reads > 0, and
+   at most once per hour; (c) pricing incl. the 5m/1h breakdown and Sonnet's corrected read price; (d) usageSummary.cache numbers on a
+   small fixture of usage rows.
+5. Comments in recipe-learn.ts and extract-llm.ts stating why they don't cache (below the 512-token minimum, no reuse).
