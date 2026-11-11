@@ -615,6 +615,26 @@ describe("usage", () => {
     expect(byDay["2026-10-01"]).toBeUndefined();
   });
 
+  it("summarizes prompt cache numbers for the month from the rows' model prices", () => {
+    const row = (at: string, model: string, i: number, r: number, w: number) =>
+      store.recordUsage({ at, model, purpose: "score", inputTokens: i, outputTokens: 0, cacheReadTokens: r, cacheWriteTokens: w, costUsd: 0 });
+    expect(store.usageSummary(now, 5).cache).toEqual({ readTokens: 0, writeTokens: 0, uncachedInputTokens: 0, hitShare: 0, savedUsd: 0 });
+    row("2026-11-02T10:00:00.000Z", "claude-opus-5-5", 1_000_000, 0, 1_000_000); // write: costs (5 - 4) extra
+    row("2026-11-02T10:05:00.000Z", "claude-sonnet-5-5", 1_000_000, 8_000_000, 0); // reads save (2 - 0.1) each
+    row("2026-10-30T10:05:00.000Z", "claude-opus-5-5", 9_000_000, 9_000_000, 9_000_000); // previous month: ignored
+    const c = store.usageSummary(now, 5).cache;
+    expect(c.readTokens).toBe(8_000_000);
+    expect(c.writeTokens).toBe(1_000_000);
+    expect(c.uncachedInputTokens).toBe(2_000_000);
+    expect(c.hitShare).toBeCloseTo(8 / 11, 9);
+    expect(c.savedUsd).toBeCloseTo(8 * 1.9 - 1 * 1, 9);
+  });
+
+  it("cache savings can be negative before any read", () => {
+    store.recordUsage({ at: "2026-11-02T10:00:00.000Z", model: "claude-haiku-5-5", purpose: "score", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 1_000_000, costUsd: 0 });
+    expect(store.usageSummary(now, 5).cache.savedUsd).toBeCloseTo(-0.025, 9);
+  });
+
   it("budget flag is false while under budget", () => {
     use("2026-11-02T10:00:00.000Z", 1);
     expect(store.usageSummary(now, 5)).toMatchObject({ budgetExceeded: false, monthUsd: 1 });

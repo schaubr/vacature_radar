@@ -124,8 +124,16 @@ function start(): void {
   const orsSecrets = new SafeStorageSecrets(userData, "ors-secret.bin");
   const fetcher = new PoliteFetcher(electronRawFetch, { onWarn: (m) => db.log("warn", m), t });
   const renderer = new ElectronRenderer(t);
+  let lastCacheWarnAt = 0;
   const llm = new AnthropicLlmClient({
     t,
+    // Prompt caching silently stopped working: tell the owner, but at most once per hour.
+    onCacheMiss: ({ purpose }) => {
+      const nowMs = Date.now();
+      if (nowMs - lastCacheWarnAt < 3_600_000) return;
+      lastCacheWarnAt = nowMs;
+      db.log("warn", t(purpose === "score" ? "llm.cacheMiss.score" : "llm.cacheMiss.other"));
+    },
     getApiKey: () => secrets.get(),
     budget: {
       monthUsd: () => db.monthUsageUsd(new Date()),

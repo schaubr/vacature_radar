@@ -390,6 +390,9 @@ export const en = {
   "settings.usage.calls_one": "{count} call",
   "settings.usage.calls_other": "{count} calls",
   "settings.usage.daysAria": "Spend per day, last 30 days",
+  "settings.usage.cache": "Prompt cache: {share} of prompt tokens served from cache this month, saving about {amount}.",
+  "settings.usage.cacheCost": "Prompt cache: {share} of prompt tokens served from cache this month, costing about {amount} extra so far.",
+  "settings.usage.cacheNone": "No Claude calls yet this month.",
 
   // ---------- main process ----------
   "tray.open": "Open {app}",
@@ -493,6 +496,8 @@ export const en = {
   "llm.apiError": "Anthropic API error ({status}): {message}",
   "llm.budget": "Monthly budget of {limit} reached ({spent} spent)",
   "llm.refused": "The model declined to answer",
+  "llm.cacheMiss.score": "Prompt cache missed while scoring a vacancy, so this scan costs more than it should. Settings > Usage shows the effect.",
+  "llm.cacheMiss.other": "Prompt cache missed on a Claude call that should have used it. Settings > Usage shows the effect.",
   "llm.refusedCat": "The model declined to answer ({category})",
   "llm.notConfigured": "Anthropic API key is not configured",
   "service.invalidApiKey": "Invalid API key",

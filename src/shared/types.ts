@@ -210,6 +210,19 @@ export interface UsageSummary {
   budgetExceeded: boolean;
   byPurpose: { purpose: LlmPurpose; usd: number; calls: number }[];
   last30Days: { day: string; usd: number }[];
+  /** Prompt cache effectiveness for the current month. */
+  cache: CacheSummary;
+}
+
+export interface CacheSummary {
+  readTokens: number;
+  writeTokens: number;
+  /** Input tokens that were not served from or written to the cache. */
+  uncachedInputTokens: number;
+  /** 0..1: reads / (reads + writes + uncached input). 0 when there were no input tokens. */
+  hitShare: number;
+  /** Money saved versus sending everything uncached (negative while writes outweigh reads). */
+  savedUsd: number;
 }
 
 export interface LogEntry {

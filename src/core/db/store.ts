@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { priceFor } from "../llm/pricing";
 import {
   DEFAULT_PREFERENCES,
   DEFAULT_SETTINGS,
@@ -16,6 +17,7 @@ import {
   type Source,
   type SourceInput,
   type UsageSummary,
+  type CacheSummary,
   type VacancyCounts,
   type VacancyDetail,
   type VacancyFields,
@@ -1050,7 +1052,36 @@ export class Store {
       const day = new Date(firstDay + i * 86_400_000).toISOString().slice(0, 10);
       last30Days.push({ day, usd: byDay.get(day) ?? 0 });
     }
-    return { monthUsd, budgetUsd, budgetExceeded: monthUsd >= budgetUsd, byPurpose, last30Days };
+    return { monthUsd, budgetUsd, budgetExceeded: monthUsd >= budgetUsd, byPurpose, last30Days, cache: this.cacheSummary(a, b) };
+  }
+
+  /**
+   * Cache effectiveness for [a, b). savedUsd per row (its model's prices): reads save (input - cacheRead) each,
+   * writes cost (cacheWrite - input) extra each. Rows keep only the total write count, so writes are priced as
+   * 5-minute (the TTL this app requests); a rare 1-hour write is slightly under-counted here.
+   */
+  private cacheSummary(a: string, b: string): CacheSummary {
+    let readTokens = 0;
+    let writeTokens = 0;
+    let uncachedInputTokens = 0;
+    let saved = 0;
+    for (const r of this.all(
+      `SELECT model, SUM(input_tokens) AS i, SUM(cache_read_tokens) AS r, SUM(cache_write_tokens) AS w
+       FROM llm_usage WHERE at >= ? AND at < ? GROUP BY model`,
+      a,
+      b,
+    )) {
+      const p = priceFor(str(r.model));
+      const i = Number(r.i);
+      const rd = Number(r.r);
+      const w = Number(r.w);
+      uncachedInputTokens += i;
+      readTokens += rd;
+      writeTokens += w;
+      saved += rd * (p.input - p.cacheRead) - w * (p.cacheWrite - p.input);
+    }
+    const denom = readTokens + writeTokens + uncachedInputTokens;
+    return { readTokens, writeTokens, uncachedInputTokens, hitShare: denom > 0 ? readTokens / denom : 0, savedUsd: saved / 1_000_000 };
   }
 
   log(level: LogEntry["level"], message: string, sourceId: number | null = null): void {

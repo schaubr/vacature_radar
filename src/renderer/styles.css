@@ -384,6 +384,7 @@ kbd:first-child { margin-left: 0; }
 .usage { border-top: 0.5px solid var(--sep); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .usage-head { display: flex; justify-content: space-between; align-items: baseline; }
 .usage-big { font-size: 22px; letter-spacing: -0.02em; }
+.cache-line { margin: 0; font-size: 12.5px; line-height: 1.4; }
 .purposes td { padding-left: 0; padding-right: 0; }
 .purposes td:first-child { padding-left: 0; }
 .days-bars { display: flex; align-items: flex-end; gap: 3px; height: 56px; }

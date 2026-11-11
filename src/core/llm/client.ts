@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { tEn, type Translator } from "../../shared/i18n";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
@@ -69,7 +70,20 @@ export interface AnthropicLlmClientOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Translator for user-facing errors, resolved at call time (default English). */
   t?: Translator;
+  /**
+   * Called when a request whose cacheable prefix was already sent less than CACHE_MISS_WINDOW_MS ago
+   * reports zero cache reads, i.e. caching silently stopped working. The caller decides how to surface it.
+   */
+  onCacheMiss?: (info: { purpose: LlmPurpose; model: string; writeTokens: number }) => void;
+  /** Test hook: clock in epoch milliseconds (default Date.now). */
+  clock?: () => number;
 }
+
+/**
+ * Entries are written with the 5-minute TTL, so a second request with the same prefix within 4 minutes
+ * (a minute of slack) must read the entry the first one wrote.
+ */
+export const CACHE_MISS_WINDOW_MS = 240_000;
 
 interface RawParams {
   model: ModelId;
@@ -83,18 +97,26 @@ interface RawParams {
 interface BetaResponse {
   stop_reason: string | null;
   stop_details?: { category?: string | null } | null;
+  model?: string | null;
   content: { type: string; text?: string }[];
   usage?: {
+    /** Per-sampling-iteration usage; an entry of type "fallback_message" means a fallback model served the turn. */
+    iterations?: { type?: string }[] | null;
     input_tokens?: number;
     output_tokens?: number;
     cache_read_input_tokens?: number | null;
     cache_creation_input_tokens?: number | null;
+    /** Breakdown of the writes by TTL (BetaCacheCreation in the SDK); null/absent on older responses. */
+    cache_creation?: { ephemeral_5m_input_tokens?: number | null; ephemeral_1h_input_tokens?: number | null } | null;
   };
 }
 
 export class AnthropicLlmClient implements LlmClient {
   private clients = new Map<string, Anthropic>();
   private sleep: (ms: number) => Promise<void>;
+  private clock: () => number;
+  /** Start and completion time (ms) of the last completed request per cacheable-prefix hash. */
+  private lastPrefix = new Map<string, { startedAt: number; completedAt: number }>();
 
   private get t(): Translator {
     return this.opts.t ?? tEn;
@@ -102,6 +124,18 @@ export class AnthropicLlmClient implements LlmClient {
 
   constructor(private opts: AnthropicLlmClientOptions) {
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.clock = opts.clock ?? Date.now;
+  }
+
+  /**
+   * SHA-256 of what the cache keys on: model + effort + system blocks + output format schema.
+   * Never the per-vacancy messages. Null when the request has no cache_control marker.
+   */
+  private prefixHash(p: RawParams): string | null {
+    if (!p.system.some((b) => (b as { cache_control?: unknown }).cache_control)) return null;
+    return createHash("sha256")
+      .update(JSON.stringify({ model: p.model, effort: p.effort, system: p.system, format: p.format ?? null }))
+      .digest("hex");
   }
 
   async structured<T>(req: StructuredRequest<T>): Promise<{ data: T; usage: LlmUsage }> {
@@ -173,6 +207,8 @@ export class AnthropicLlmClient implements LlmClient {
       params.fallbacks = "default";
     }
 
+    const prefix = this.prefixHash(p);
+    const startedAt = this.clock();
     const send = () => client.beta.messages.create(params as never) as unknown as Promise<BetaResponse>;
     let res: BetaResponse;
     try {
@@ -193,6 +229,32 @@ export class AnthropicLlmClient implements LlmClient {
     const usage = this.makeUsage(p.model, res.usage);
     // Record spend even when the answer is unusable: the tokens were billed.
     this.opts.onUsage({ ...usage, purpose });
+
+    // Standing check: the same cacheable prefix, sent again within the TTL, must be read from the cache.
+    // Skipped when a fallback model served the turn (its cache is separate), and for overlapping requests
+    // (an entry is only readable once the request that writes it has completed).
+    if (prefix) {
+      const completedAt = this.clock();
+      const previous = this.lastPrefix.get(prefix);
+      this.lastPrefix.set(prefix, { startedAt, completedAt });
+      const fallbackServed =
+        (typeof res.model === "string" && res.model !== p.model) ||
+        res.content.some((b) => b.type === "fallback") ||
+        (res.usage?.iterations ?? []).some((i) => i.type === "fallback_message");
+      if (
+        previous !== undefined &&
+        !fallbackServed &&
+        previous.completedAt <= startedAt &&
+        startedAt - previous.startedAt < CACHE_MISS_WINDOW_MS &&
+        usage.cacheReadTokens === 0
+      ) {
+        try {
+          this.opts.onCacheMiss?.({ purpose, model: p.model, writeTokens: usage.cacheWriteTokens });
+        } catch {
+          // monitoring must never break a call
+        }
+      }
+    }
 
     if (res.stop_reason === "refusal") {
       const cat = res.stop_details?.category;
@@ -217,14 +279,20 @@ export class AnthropicLlmClient implements LlmClient {
     const inputTokens = u?.input_tokens ?? 0;
     const outputTokens = u?.output_tokens ?? 0;
     const cacheReadTokens = u?.cache_read_input_tokens ?? 0;
-    const cacheWriteTokens = u?.cache_creation_input_tokens ?? 0;
+    // Bill 5-minute and 1-hour writes at their own prices when the breakdown is present; otherwise
+    // the total counts as 5-minute (the only TTL this app requests).
+    const total = u?.cache_creation_input_tokens ?? 0;
+    const bd = u?.cache_creation;
+    const write1h = bd ? (bd.ephemeral_1h_input_tokens ?? 0) : 0;
+    const write5m = bd ? (bd.ephemeral_5m_input_tokens ?? 0) : total;
+    const cacheWriteTokens = bd ? write5m + write1h : total;
     return {
       model,
       inputTokens,
       outputTokens,
       cacheReadTokens,
       cacheWriteTokens,
-      costUsd: costUsd(model, { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }),
+      costUsd: costUsd(model, { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens: write5m, cacheWrite1hTokens: write1h }),
     };
   }
 }

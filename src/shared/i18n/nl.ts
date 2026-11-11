@@ -389,6 +389,9 @@ export const nl: Record<keyof typeof en, string> = {
   "settings.usage.calls_one": "{count} aanroep",
   "settings.usage.calls_other": "{count} aanroepen",
   "settings.usage.daysAria": "Uitgaven per dag, laatste 30 dagen",
+  "settings.usage.cache": "Promptcache: {share} van de prompttokens kwam deze maand uit de cache, een besparing van ongeveer {amount}.",
+  "settings.usage.cacheCost": "Promptcache: {share} van de prompttokens kwam deze maand uit de cache, voorlopig ongeveer {amount} extra kosten.",
+  "settings.usage.cacheNone": "Deze maand nog geen Claude-aanroepen.",
 
   // ---------- main process ----------
   "tray.open": "{app} openen",
@@ -492,6 +495,8 @@ export const nl: Record<keyof typeof en, string> = {
   "llm.apiError": "Anthropic API-fout ({status}): {message}",
   "llm.budget": "Maandbudget van {limit} bereikt ({spent} uitgegeven)",
   "llm.refused": "Het model weigerde te antwoorden",
+  "llm.cacheMiss.score": "De promptcache werd gemist tijdens het beoordelen van een vacature, dus deze scan kost meer dan nodig. Instellingen > Verbruik toont het effect.",
+  "llm.cacheMiss.other": "De promptcache werd gemist bij een Claude-aanroep die hem had moeten gebruiken. Instellingen > Verbruik toont het effect.",
   "llm.refusedCat": "Het model weigerde te antwoorden ({category})",
   "llm.notConfigured": "Anthropic API-sleutel is niet ingesteld",
   "service.invalidApiKey": "Ongeldige API-sleutel",

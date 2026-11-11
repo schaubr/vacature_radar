@@ -79,7 +79,7 @@ describe("pricing", () => {
     });
     expect(c).toBeCloseTo(4 + 20 + 0.2 + 5, 6);
     expect(costUsd("claude-haiku-5-5", { inputTokens: 2_000_000, outputTokens: 0 })).toBeCloseTo(0.2, 6);
-    expect(costUsd("claude-sonnet-5-5", { inputTokens: 0, outputTokens: 100_000, cacheReadTokens: 500_000 })).toBeCloseTo(1.1, 6);
+    expect(costUsd("claude-sonnet-5-5", { inputTokens: 0, outputTokens: 100_000, cacheReadTokens: 500_000 })).toBeCloseTo(1.05, 6);
   });
 });
 

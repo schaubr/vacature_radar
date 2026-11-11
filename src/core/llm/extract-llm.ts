@@ -22,6 +22,9 @@ export async function llmExtractListing(
   compact: string,
   url: string,
 ): Promise<ListingItem[]> {
+  // Deliberately not cached (cache: false): the system prompt is ~220 tokens, below the 512-token minimum
+  // for Opus/Sonnet/Haiku 5.5 (the API silently ignores the marker) and every page differs; a marker would
+  // only add the 1.25x write premium. See DESIGN.md section 20.
   const { data } = await llm.structured({
     purpose: "extract_listing",
     model: settings.utilityModel,

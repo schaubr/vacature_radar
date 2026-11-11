@@ -69,6 +69,11 @@ export function formatNumber(lang: Lang, n: number, opts?: Intl.NumberFormatOpti
   return new Intl.NumberFormat(LOCALE[lang], opts).format(n);
 }
 
+/** "81%" / "81 %" from a 0..1 share. */
+export function formatPercent(lang: Lang, share: number): string {
+  return new Intl.NumberFormat(LOCALE[lang], { style: "percent", maximumFractionDigits: 0 }).format(share);
+}
+
 /** "$1.85" / "$ 1,85"; three decimals below 0.10 unless `digits` is given. */
 export function formatUsd(lang: Lang, n: number, digits?: number): string {
   const d = digits ?? (n < 0.1 ? 3 : 2);

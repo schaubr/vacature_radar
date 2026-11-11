@@ -276,6 +276,7 @@ function install() {
     "usage.summary": (): UsageSummary => ({
       monthUsd: 1.846, budgetUsd: settings.monthlyBudgetUsd, budgetExceeded: false,
       byPurpose: [{ purpose: "score", usd: 1.52, calls: 61 }, { purpose: "learn_recipe", usd: 0.21, calls: 3 }, { purpose: "extract_listing", usd: 0.09, calls: 4 }, { purpose: "profile_import", usd: 0.026, calls: 1 }],
+      cache: { readTokens: 118_400, writeTokens: 3_300, uncachedInputTokens: 24_700, hitShare: 118_400 / (118_400 + 3_300 + 24_700), savedUsd: 1.12 },
       last30Days: Array.from({ length: 30 }, (_, i) => ({ day: new Date(Date.now() - (29 - i) * D).toISOString().slice(0, 10), usd: i % 5 === 0 ? 0 : 0.02 + ((i * 37) % 11) / 60 })),
     }),
     "log.list": (limit) => log.slice(0, limit).map((l) => ({ ...l, message: logMessage(l.message) })),

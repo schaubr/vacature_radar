@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  DEFAULT_LANG, formatDate, formatDateTime, formatNumber, formatRelative, formatTime, formatUsd, isLang, translate,
+  DEFAULT_LANG, formatDate, formatDateTime, formatNumber, formatPercent, formatRelative, formatTime, formatUsd, isLang, translate,
   type Lang, type MessageKey, type Params,
 } from "../shared/i18n";
 import { call, onRadar } from "./api";
@@ -12,6 +12,7 @@ export interface Fmt {
   relative(iso: string | null | undefined): string;
   number(n: number, opts?: Intl.NumberFormatOptions): string;
   usd(n: number, digits?: number): string;
+  percent(share: number): string;
 }
 
 export interface I18n {
@@ -62,6 +63,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         relative: (iso) => formatRelative(lang, iso),
         number: (n, opts) => formatNumber(lang, n, opts),
         usd: (n, digits) => formatUsd(lang, n, digits),
+        percent: (share) => formatPercent(lang, share),
       },
     }),
     [lang, setLang],

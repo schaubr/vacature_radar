@@ -248,6 +248,14 @@ export function SettingsView({ shared }: { shared: Shared }) {
                   {u.budgetExceeded && <span className="level l-error">{t("status.budgetShort")}</span>}
                 </div>
                 <Bar value={pct} tone={u.budgetExceeded ? "knockout" : pct > 80 ? "possible" : "strong"} />
+                <p className="cache-line subtle">
+                  {u.byPurpose.length === 0
+                    ? t("settings.usage.cacheNone")
+                    : t(u.cache.savedUsd < 0 ? "settings.usage.cacheCost" : "settings.usage.cache", {
+                        share: fmt.percent(u.cache.hitShare),
+                        amount: fmt.usd(Math.abs(u.cache.savedUsd)),
+                      })}
+                </p>
                 {u.byPurpose.length > 0 && (
                   <table className="table compact purposes">
                     <tbody>

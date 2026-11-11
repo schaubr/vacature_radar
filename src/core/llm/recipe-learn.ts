@@ -50,6 +50,9 @@ export async function learnRecipe(
   url: string,
   rawHtml: string,
 ): Promise<Recipe | null> {
+  // Deliberately not cached (cache: false): the system prompt is ~460 tokens, below the 512-token minimum
+  // for Opus/Sonnet/Haiku 5.5 (the API silently ignores the marker), the page content differs per call and
+  // there is no reuse; a marker would only add the 1.25x write premium. See DESIGN.md section 20.
   const system = buildRecipeSystem();
   const base = buildRecipePrompt(cleanedHtml, url);
 
